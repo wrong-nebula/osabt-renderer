@@ -169,6 +169,79 @@ kernel void k_pass1_scene_c(
   cur_gbuf[idx]   = os_pack_gbuf_h4(&u, p1.gbuf_p, p1.gbuf_n);
 }
 
+/* Packed 8B G-buffer Pass 1 for the showcase scenes E/F/G (1-spp rect-light shadow + 1-bounce GI).
+ * One entry kernel per scene so the scene dispatch constant-folds away. */
+#define OS_SHOW_PASS1_KERNEL(NAME, SCENE)                                             \
+kernel void NAME(                                                                     \
+    constant FrameUniforms& u [[buffer(0)]],                                          \
+    device h4* cur_irrad      [[buffer(1)]],                                          \
+    device u16_4* cur_albedo  [[buffer(2)]],                                          \
+    device h4* cur_gbuf       [[buffer(3)]],                                          \
+    uint2 gid                 [[thread_position_in_grid]])                            \
+{                                                                                     \
+  int px = (int)gid.x;                                                                \
+  int py = (int)gid.y;                                                                \
+  if (px >= u.width || py >= u.height) return;                                        \
+  int idx = py * u.width + px;                                                        \
+  v3 ro = mk3(u.cam_eye[0], u.cam_eye[1], u.cam_eye[2]);                              \
+  float fx_c = (float)px + 0.5f;                                                      \
+  float fy_c = (float)py + 0.5f;                                                      \
+  v3 rd_c = os_camera_ray(&u, fx_c, fy_c);                                            \
+  Pass1Out p1 = os_eval_show_ray(&u, ro, rd_c, fx_c, fy_c, u.mode, 0, SCENE);         \
+  cur_irrad[idx]  = v4_to_h4(p1.irrad);                                               \
+  cur_albedo[idx] = v4_to_u16(p1.albedo);                                             \
+  cur_gbuf[idx]   = os_pack_gbuf_h4(&u, p1.gbuf_p, p1.gbuf_n);                        \
+}
+OS_SHOW_PASS1_KERNEL(k_pass1_scene_e, SCENE_E)
+OS_SHOW_PASS1_KERNEL(k_pass1_scene_f, SCENE_F)
+OS_SHOW_PASS1_KERNEL(k_pass1_scene_g, SCENE_G)
+
+/* Scene H "Sponza" (triangle mesh through a BVH): 1-spp Pass 1 into the packed G-buffer */
+kernel void k_pass1_scene_h(
+    constant FrameUniforms& u [[buffer(0)]],
+    device h4* cur_irrad      [[buffer(1)]],
+    device u16_4* cur_albedo  [[buffer(2)]],
+    device h4* cur_gbuf       [[buffer(3)]],
+    const device v4* nodes    [[buffer(4)]],
+    const device v4* tri_a    [[buffer(5)]],
+    const device v4* tri_n    [[buffer(6)]],
+    uint2 gid                 [[thread_position_in_grid]])
+{
+  int px = (int)gid.x;
+  int py = (int)gid.y;
+  if (px >= u.width || py >= u.height) return;
+  int idx = py * u.width + px;
+  Pass1Out p1 = os_pass1_pixel_mesh(&u, px, py, nodes, tri_a, tri_n);
+  cur_irrad[idx]  = v4_to_h4(p1.irrad);
+  cur_albedo[idx] = v4_to_u16(p1.albedo);
+  cur_gbuf[idx]   = os_pack_gbuf_h4(&u, p1.gbuf_p, p1.gbuf_n);
+}
+
+/* Scene H ground truth. Rendered one horizontal band per command buffer (rows band.x .. band.y-1)
+ * so a 64-spp frame of BVH rays never becomes one multi-second GPU submission. */
+kernel void k_pass1_gt_mesh(
+    constant FrameUniforms& u [[buffer(0)]],
+    device v4* out_rgb        [[buffer(1)]],
+    device v4* out_gn         [[buffer(2)]],
+    device v4* out_gp         [[buffer(3)]],
+    const device v4* nodes    [[buffer(4)]],
+    const device v4* tri_a    [[buffer(5)]],
+    const device v4* tri_n    [[buffer(6)]],
+    constant int4& band       [[buffer(7)]],
+    uint2 gid                 [[thread_position_in_grid]])
+{
+  int px = (int)gid.x;
+  int py = (int)gid.y + band.x;
+  if (px >= u.width || py >= u.height || py >= band.y) return;
+  int idx = py * u.width + px;
+  Pass1Out p1 = os_pass1_pixel_mesh(&u, px, py, nodes, tri_a, tri_n);
+  out_rgb[idx] = mk4(p1.irrad.x, p1.irrad.y, p1.irrad.z, 1.0f);
+  if (u.pad0 != 0) {
+    out_gn[idx] = p1.gbuf_n;
+    out_gp[idx] = p1.gbuf_p;
+  }
+}
+
 /* Scene A OS-ABT Pass 2H: Threadgroup-tiled 32x8 Horizontal Psi_perp Indirect Filter
  * (6 KB on-chip SRAM tile -> zero DRAM reads inside the 16-tap stencil loop!) */
 kernel void k_pass2_osabt_spatial_h(

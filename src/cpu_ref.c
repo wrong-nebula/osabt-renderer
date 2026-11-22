@@ -4,6 +4,7 @@
  * Bit-identical IEEE-754 packed 8B half4 G-buffer & pass schedule to src/metal_runner.m.
  */
 #include "scene_setup.h"
+#include "mesh_bvh.h"
 #include <time.h>
 
 static double now_ms(void) {
@@ -19,7 +20,7 @@ static int is_direct_pass(const RunConfig* cfg) {
 int main(int argc, char** argv) {
   RunConfig cfg;
   if (os_parse_args(argc, argv, &cfg) != 0) {
-    fprintf(stderr, "Usage: osabt_cpu --scene a|b|c|d --mode osabt|ablated|baseline|gt ...\n");
+    fprintf(stderr, "Usage: osabt_cpu --scene a|b|c|d|e|f|g|h --mode osabt|ablated|baseline|gt ...\n");
     return 1;
   }
   size_t npix = (size_t)cfg.width * (size_t)cfg.height;
@@ -56,6 +57,15 @@ int main(int argc, char** argv) {
   double p1_acc = 0.0, p2_acc = 0.0;
   int direct = is_direct_pass(&cfg);
 
+  /* Mesh scene (Scene H): load the triangles and build the BVH once */
+  OsMesh mesh;
+  memset(&mesh, 0, sizeof(mesh));
+  int use_mesh = (cfg.scene_id == SCENE_H) ? 1 : 0;
+  if (use_mesh && os_mesh_load(cfg.mesh_path, &mesh) != 0) return 1;
+  const v4* mesh_nodes = (const v4*)mesh.nodes;
+  const v4* mesh_tri_a = (const v4*)mesh.tri_a;
+  const v4* mesh_tri_n = (const v4*)mesh.tri_n;
+
   for (int f = 0; f < cfg.frames; ++f) {
     if (cfg.mode == MODE_GT && cfg.has_key_frames && !os_should_save_frame(&cfg, f)) {
       continue;
@@ -70,7 +80,8 @@ int main(int argc, char** argv) {
       for (int py = 0; py < cfg.height; ++py) {
         for (int px = 0; px < cfg.width; ++px) {
           int idx = py * cfg.width + px;
-          Pass1Out p1 = os_pass1_pixel(&u, px, py);
+          Pass1Out p1 = use_mesh ? os_pass1_pixel_mesh(&u, px, py, mesh_nodes, mesh_tri_a, mesh_tri_n)
+                                 : os_pass1_pixel(&u, px, py);
           out_rgb[idx] = mk4(p1.irrad.x, p1.irrad.y, p1.irrad.z, 1.0f);
           if (cfg.dump_gbuf) {
             gn_dump[idx] = p1.gbuf_n;
@@ -82,7 +93,8 @@ int main(int argc, char** argv) {
       for (int py = 0; py < cfg.height; ++py) {
         for (int px = 0; px < cfg.width; ++px) {
           int idx = py * cfg.width + px;
-          Pass1Out p1 = os_pass1_pixel(&u, px, py);
+          Pass1Out p1 = use_mesh ? os_pass1_pixel_mesh(&u, px, py, mesh_nodes, mesh_tri_a, mesh_tri_n)
+                                 : os_pass1_pixel(&u, px, py);
           cur_irrad[idx]      = v4_to_h4(p1.irrad);
           cur_albedo[idx]     = v4_to_u16(p1.albedo);
           gbuf_buf[cur][idx]  = os_pack_gbuf_h4(&u, p1.gbuf_p, p1.gbuf_n);
@@ -180,6 +192,7 @@ int main(int argc, char** argv) {
   free(cur_irrad); free(cur_direct); free(cur_albedo);
   free(gbuf_buf[0]); free(gbuf_buf[1]);
   free(st_buf[0]); free(st_buf[1]);
+  if (use_mesh) os_mesh_free(&mesh);
   free(tmp_a); free(tmp_b); free(tmp_rep);
   free(sto_buf[0]); free(sto_buf[1]);
   free(tile_su); free(tile_ss); free(tile_ss2); free(tile_sus);

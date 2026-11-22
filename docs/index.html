@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sponza in OS-ABT</title>
+<meta name="description" content="The Sponza atrium ray-traced at one sample per pixel and reconstructed with OS-ABT, compared against a TAA + a-trous baseline and ground truth.">
+<style>
+  :root {
+    --bg: #101114; --panel: #181a1f; --line: #2a2d35; --text: #e8e6e1; --muted: #9a9ca3;
+    --accent: #f0b46a; --cool: #8fb8e8; --radius: 10px;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #e9edf2; --panel: #ffffff; --line: #cfd6df; --text: #171a20; --muted: #505868; --accent: #84490c; --cool: #2f6fb3; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 var(--sans); }
+  main { max-width: 1000px; margin: 0 auto; padding: 40px 16px 72px; }
+  h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.1; margin: 0 0 12px; letter-spacing: -0.02em; }
+  h2 { font-size: 21px; margin: 44px 0 10px; letter-spacing: -0.01em; }
+  p { margin: 0 0 14px; }
+  .lede { color: var(--muted); font-size: 18px; max-width: 62ch; }
+  a { color: var(--accent); }
+  .stage { position: relative; margin-top: 22px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #000; touch-action: none; cursor: ew-resize; }
+  .stage canvas { display: block; width: 100%; height: auto; }
+  .tag { position: absolute; top: 12px; padding: 8px 14px; border-radius: 999px; font: 600 12px/1.3 var(--sans); background: rgba(0,0,0,.62); color: #fff; pointer-events: none; }
+  .tag.l { left: 12px; } .tag.r { right: 12px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 12px; }
+  .bar label { color: var(--muted); font-size: 14px; display: flex; gap: 6px; align-items: center; }
+  select, button { font: inherit; font-size: 14px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px; }
+  button { cursor: pointer; min-width: 74px; }
+  input[type=range] { flex: 1 1 180px; accent-color: var(--accent); }
+  .frame { font: 13px var(--mono); color: var(--muted); min-width: 9ch; text-align: right; }
+  .hint { color: var(--muted); font-size: 14px; margin-top: 8px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.best { color: var(--accent); font-weight: 600; }
+  ul { margin: 0 0 14px; padding-left: 20px; }
+  li { margin-bottom: 7px; }
+  footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sponza in OS-ABT</h1>
+  <p class="lede">The Sponza atrium, ray-traced at one sample per pixel and reconstructed in real time with
+  OS-ABT, next to a standard TAA&nbsp;+&nbsp;à-trous baseline. Drag across the picture to compare.</p>
+
+  <div class="stage" id="walkStage">
+    <canvas id="walk" width="960" height="540" aria-label="Sponza walkthrough comparison"></canvas>
+    <span class="tag l" id="walkTagL"></span><span class="tag r" id="walkTagR"></span>
+  </div>
+  <div class="bar">
+    <button id="play" type="button">Pause</button>
+    <input id="scrub" type="range" min="0" max="119" value="0" aria-label="Frame">
+    <span class="frame" id="frameLbl">frame 0</span>
+    <label>Left <select id="walkL"></select></label>
+    <label>Right <select id="walkR"></select></label>
+  </div>
+  <p class="hint">120 frames of a slow walk down the atrium, rendered at 1280×720 and shown here at 960×540.
+  Every frame uses one primary ray per pixel; nothing is computed in your browser.</p>
+
+  <h2>Against ground truth</h2>
+  <p>Two frames of the walk next to a 64-samples-per-pixel reference, at full resolution.</p>
+  <div class="stage" id="stillStage">
+    <canvas id="still" width="1280" height="720" aria-label="Still comparison against ground truth"></canvas>
+    <span class="tag l" id="stillTagL"></span><span class="tag r" id="stillTagR"></span>
+  </div>
+  <div class="bar">
+    <label>Frame <select id="stillF"><option value="0060">60</option><option value="0119">119</option></select></label>
+    <label>Left <select id="stillL"></select></label>
+    <label>Right <select id="stillR"></select></label>
+  </div>
+
+  <h2>Numbers</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Error vs ground truth (RMSE)</th><th>OS-ABT</th><th>Baseline</th><th>Ablated</th></tr></thead>
+      <tbody>
+        <tr><td>Frame 60</td><td class="n best">0.202</td><td class="n">0.277</td><td class="n">0.318</td></tr>
+        <tr><td>Frame 119</td><td class="n best">0.207</td><td class="n">0.287</td><td class="n">0.334</td></tr>
+        <tr><td>Fastest frame, 1280×720, Apple M1</td><td class="n">183 ms</td><td class="n">185 ms</td><td class="n">204 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">Lower error is better. The reference is itself visibly grainy at 64 samples, so part of every
+  error figure is reference noise.</p>
+
+  <h2>What you are looking at</h2>
+  <ul>
+    <li><strong>Geometry.</strong> 261,813 triangles traced through a bounding-volume hierarchy built at load time.
+        The same traversal code runs in the C reference and in the Metal compute kernels.</li>
+    <li><strong>Light.</strong> A warm sun shining down the length of the atrium through the roof opening, cool sky
+        light through the same opening, and one bounce of indirect light: six rays per pixel in total, one sample each.</li>
+    <li><strong>Reconstruction.</strong> That one-sample image is noisy. OS-ABT filters it in space and time using
+        only surface normals and depth. “Ablated” is the same pipeline with its key terms removed; “Baseline” is
+        temporal anti-aliasing followed by an à-trous filter.</li>
+  </ul>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li><strong>Not real time on this scene.</strong> About 0.2 s per frame (roughly 5 fps) on an Apple M1. Almost all
+        of that is ray tracing the mesh; the filter itself costs a few milliseconds.</li>
+    <li><strong>Untextured.</strong> This copy of the model has a single material and no textures, so the stone is one
+        colour with a darker floor.</li>
+    <li><strong>The first frame is rough.</strong> With no history to draw on, frame 0 is blotchy in every mode; it
+        settles within a few frames.</li>
+    <li><strong>Edges are not anti-aliased.</strong> Each pixel gets one primary ray, so silhouettes are
+        stair-stepped, and sun edges come out softer than in the reference.</li>
+    <li><strong>Dark dots along some folds and silhouettes.</strong> They are in the reference too, so they come
+        from the ray tracing of this mesh, not from the reconstruction. Not yet fixed.</li>
+    <li><strong>Display only.</strong> The blue of the visible sky and the tone curve are chosen for display and are
+        applied identically to every mode.</li>
+  </ul>
+
+  <footer>
+    Sponza atrium model: Crytek Sponza by Frank Meinl, after the original by Marko Dabrovic.
+    Source code: <a href="https://github.com/wrong-nebula/osabt-renderer">github.com/wrong-nebula/osabt-renderer</a>.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const NAMES = { gt: "Ground truth", osabt: "OS-ABT", baseline: "Baseline", ablated: "Ablated" };
+
+  function fill(sel, keys, value) {
+    for (const k of keys) { const o = document.createElement("option"); o.value = k; o.textContent = NAMES[k]; sel.appendChild(o); }
+    sel.value = value;
+  }
+
+  /* Wipe comparison on a canvas. draw(ctx, key, w, h) paints one side's full image. */
+  function makeWipe(stage, canvas, tagL, tagR, getL, getR, draw) {
+    const ctx = canvas.getContext("2d");
+    let split = 0.5;
+    function render() {
+      const w = canvas.width, h = canvas.height, x = Math.round(split * w);
+      draw(ctx, getL(), w, h);
+      ctx.save(); ctx.beginPath(); ctx.rect(x, 0, w - x, h); ctx.clip();
+      draw(ctx, getR(), w, h);
+      ctx.restore();
+      ctx.fillStyle = "rgba(255,255,255,.9)"; ctx.fillRect(x - 1, 0, 2, h);
+      tagL.textContent = NAMES[getL()]; tagR.textContent = NAMES[getR()];
+    }
+    function move(ev) {
+      const r = canvas.getBoundingClientRect();
+      split = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      render();
+    }
+    stage.addEventListener("pointerdown", (ev) => { stage.setPointerCapture(ev.pointerId); move(ev); });
+    stage.addEventListener("pointermove", (ev) => { if (ev.buttons || ev.pointerType === "touch") move(ev); });
+    return render;
+  }
+  const $ = (id) => document.getElementById(id);
+
+  /* ---- walkthrough: one atlas video, four 960x540 tiles, so both sides are always in sync ---- */
+  const TILE = { osabt: [0, 0], baseline: [960, 0], ablated: [0, 540] };
+  const video = document.createElement("video");
+  video.src = "media/sponza_walk.mp4"; video.muted = true; video.loop = true; video.playsInline = true; video.preload = "auto";
+  const poster = new Image(); poster.src = "media/poster.jpg";
+  fill($("walkL"), ["osabt", "baseline", "ablated"], "baseline");
+  fill($("walkR"), ["osabt", "baseline", "ablated"], "osabt");
+  const FPS = 24, NF = 120;
+  const renderWalk = makeWipe($("walkStage"), $("walk"), $("walkTagL"), $("walkTagR"),
+    () => $("walkL").value, () => $("walkR").value,
+    (ctx, key, w, h) => {
+      if (video.readyState >= 2) { const t = TILE[key]; ctx.drawImage(video, t[0], t[1], 960, 540, 0, 0, w, h); }
+      else if (poster.complete && poster.naturalWidth) ctx.drawImage(poster, 0, 0, w, h);
+      else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h); }
+    });
+  function tick() {
+    renderWalk();
+    if (!video.paused) {
+      const f = Math.min(NF - 1, Math.floor(video.currentTime * FPS));
+      $("scrub").value = f; $("frameLbl").textContent = "frame " + f;
+    }
+    requestAnimationFrame(tick);
+  }
+  $("play").addEventListener("click", () => {
+    if (video.paused) { video.play(); $("play").textContent = "Pause"; } else { video.pause(); $("play").textContent = "Play"; }
+  });
+  $("scrub").addEventListener("input", () => {
+    video.pause(); $("play").textContent = "Play";
+    video.currentTime = (Number($("scrub").value) + 0.5) / FPS;
+    $("frameLbl").textContent = "frame " + $("scrub").value;
+  });
+  poster.onload = renderWalk;
+  video.play().catch(() => { $("play").textContent = "Play"; });
+  requestAnimationFrame(tick);
+
+  /* ---- stills against ground truth ---- */
+  const cache = {};
+  function still(key) {
+    const id = key + "_f" + $("stillF").value;
+    if (!cache[id]) { const im = new Image(); im.onload = () => renderStill(); im.src = "media/still_" + id + ".jpg"; cache[id] = im; }
+    return cache[id];
+  }
+  fill($("stillL"), ["gt", "osabt", "baseline", "ablated"], "gt");
+  fill($("stillR"), ["gt", "osabt", "baseline", "ablated"], "osabt");
+  const renderStill = makeWipe($("stillStage"), $("still"), $("stillTagL"), $("stillTagR"),
+    () => $("stillL").value, () => $("stillR").value,
+    (ctx, key, w, h) => {
+      const im = still(key);
+      if (im.complete && im.naturalWidth) ctx.drawImage(im, 0, 0, w, h);
+      else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h); }
+    });
+  for (const id of ["stillF", "stillL", "stillR"]) $(id).addEventListener("change", renderStill);
+  renderStill();
+})();
+</script>
+</body>
+</html>

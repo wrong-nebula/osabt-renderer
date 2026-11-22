@@ -232,7 +232,12 @@ enum {
   SCENE_A = 0,
   SCENE_B = 1,
   SCENE_C = 2,
-  SCENE_D = 3
+  SCENE_D = 3,
+  /* Showcase scenes (not part of the frozen oracle); all share os_eval_show_ray */
+  SCENE_E = 4,  /* "Gallery": ceiling-lit room with spheres, plinth and columns */
+  SCENE_F = 5,  /* "Colonnade": hall lit from a side window, forward dolly */
+  SCENE_G = 6,  /* "Still life": close-up of objects on a table */
+  SCENE_H = 7   /* "Sponza": triangle-mesh atrium traced through a BVH (needs --mesh) */
 };
 
 enum {
@@ -900,6 +905,292 @@ ABT_INLINE int os_shadow_scene_c(v3 ro, v3 rd, float max_t) {
   return 0;
 }
 
+/* -------------------------------------------------------------------------
+ * Scene E "Gallery": closed 4.8 x 3.0 m room (open toward the camera) with a visible
+ * rectangular ceiling light, three spheres, a low pedestal and two rear columns.
+ * Surface IDs: 1 floor, 2 left wall, 3 back wall, 4 right wall, 5 ceiling, 6 ivory sphere,
+ * 7 blue sphere, 8 pedestal, 9 amber sphere, 10 rear-left column, 11 rear-right column,
+ * 12 emissive light panel.
+ * ------------------------------------------------------------------------- */
+/* Slab box intersector that takes the face normal from the slab that produced the hit, so a
+ * pixel on a box edge can never pick up the neighbouring face's normal. os_isect_box_inv decides
+ * the face by position within 1 mm, which leaves dark dashes along box edges; it is left as-is
+ * because the frozen oracle's scenes A and C depend on its exact output. */
+ABT_INLINE void os_isect_box_face(v3 ro, v3 rd, v3 inv_rd, v3 bmin, v3 bmax, float sid, ABT_THREAD HitInfo* best) {
+  float tx1 = (bmin.x - ro.x) * inv_rd.x, tx2 = (bmax.x - ro.x) * inv_rd.x;
+  float ty1 = (bmin.y - ro.y) * inv_rd.y, ty2 = (bmax.y - ro.y) * inv_rd.y;
+  float tz1 = (bmin.z - ro.z) * inv_rd.z, tz2 = (bmax.z - ro.z) * inv_rd.z;
+  float nx = f_min(tx1, tx2), ny = f_min(ty1, ty2), nz = f_min(tz1, tz2);
+  float fx = f_max(tx1, tx2), fy = f_max(ty1, ty2), fz = f_max(tz1, tz2);
+  float tmin = f_max(f_max(nx, ny), nz);
+  float tmax = f_min(f_min(fx, fy), fz);
+  if (tmax < 1e-4f || tmin > tmax) return;
+  float t;
+  v3 n;
+  if (tmin > 1e-4f) {
+    t = tmin;   /* entering: outward normal opposes the ray on the entry axis */
+    if (nx >= ny && nx >= nz) n = mk3((rd.x > 0.0f) ? -1.0f : 1.0f, 0.0f, 0.0f);
+    else if (ny >= nz)        n = mk3(0.0f, (rd.y > 0.0f) ? -1.0f : 1.0f, 0.0f);
+    else                      n = mk3(0.0f, 0.0f, (rd.z > 0.0f) ? -1.0f : 1.0f);
+  } else {
+    t = tmax;   /* origin inside the box: exit face */
+    if (fx <= fy && fx <= fz) n = mk3((rd.x > 0.0f) ? 1.0f : -1.0f, 0.0f, 0.0f);
+    else if (fy <= fz)        n = mk3(0.0f, (rd.y > 0.0f) ? 1.0f : -1.0f, 0.0f);
+    else                      n = mk3(0.0f, 0.0f, (rd.z > 0.0f) ? 1.0f : -1.0f);
+  }
+  if (t < best->t) {
+    best->t = t; best->pos = v3_add(ro, v3_scale(rd, t)); best->nrm = n; best->sid = sid; best->hit = 1;
+  }
+}
+
+ABT_INLINE int os_isect_sphere_any(v3 ro, v3 rd, v3 center, float R, float max_t) {
+  v3 oc = v3_sub(ro, center);
+  float b = v3_dot(oc, rd);
+  float c = v3_dot(oc, oc) - R * R;
+  float disc = b * b - c;
+  if (disc < 0.0f) return 0;
+  float sd = f_sqrt(disc);
+  float t = -b - sd;
+  if (t <= 1e-4f) t = -b + sd;
+  return (t > 1e-4f && t < max_t) ? 1 : 0;
+}
+
+ABT_INLINE HitInfo os_trace_scene_e(v3 ro, v3 rd) {
+  HitInfo best = os_hit_none();
+  v3 inv_rd = os_make_inv_rd(rd);
+  os_isect_plane_y(ro, rd, 0.0f, 1.0f, 1.0f, &best);
+  os_isect_plane_y(ro, rd, 3.0f, -1.0f, 5.0f, &best);
+  os_isect_plane_x(ro, rd, -2.40f, 1.0f, 2.0f, &best);
+  os_isect_plane_x(ro, rd, 2.40f, -1.0f, 4.0f, &best);
+  os_isect_plane_z(ro, rd, -3.80f, 1.0f, 3.0f, &best);
+  os_isect_sphere(ro, rd, mk3(-0.60f, 0.55f, -1.75f), 0.55f, 6.0f, &best);
+  os_isect_sphere(ro, rd, mk3(-0.05f, 0.34f, 0.10f), 0.34f, 7.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(0.25f, 0.0f, -2.85f), mk3(1.35f, 0.30f, -1.95f), 8.0f, &best);
+  os_isect_sphere(ro, rd, mk3(0.80f, 0.62f, -2.40f), 0.32f, 9.0f, &best);
+  os_isect_cylinder_y(ro, rd, -1.95f, -3.30f, 0.22f, 0.0f, 3.0f, 10.0f, &best);
+  os_isect_cylinder_y(ro, rd, 1.95f, -3.30f, 0.22f, 0.0f, 3.0f, 11.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(-0.65f, 2.94f, -2.35f), mk3(0.65f, 3.10f, -1.35f), 12.0f, &best);
+  return best;
+}
+
+/* Any-hit shadow test toward the ceiling light: the room shell is convex and the light panel
+ * is the target, so only the six free-standing objects can occlude. */
+ABT_INLINE int os_shadow_scene_e(v3 ro, v3 rd, float max_t) {
+  if (os_isect_sphere_any(ro, rd, mk3(-0.60f, 0.55f, -1.75f), 0.55f, max_t)) return 1;
+  if (os_isect_sphere_any(ro, rd, mk3(-0.05f, 0.34f, 0.10f), 0.34f, max_t)) return 1;
+  if (os_isect_sphere_any(ro, rd, mk3(0.80f, 0.62f, -2.40f), 0.32f, max_t)) return 1;
+  if (os_isect_box_any(ro, os_make_inv_rd(rd), mk3(0.25f, 0.0f, -2.85f), mk3(1.35f, 0.30f, -1.95f), max_t)) return 1;
+  if (os_isect_cylinder_y_any(ro, rd, -1.95f, -3.30f, 0.22f, 0.0f, 3.0f, max_t)) return 1;
+  if (os_isect_cylinder_y_any(ro, rd, 1.95f, -3.30f, 0.22f, 0.0f, 3.0f, max_t)) return 1;
+  return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Scene F "Colonnade": 4.8 m wide hall, 11 m deep, lit only by one compact window panel in
+ * the left wall. Four full-height columns stand between the window and the camera's side of
+ * the hall, so their shadows fan out across the floor and up the right wall; a red sphere on
+ * a plinth sits at the far end.
+ * Surface IDs: 1 floor, 2 left wall, 3 end wall, 4 right wall, 5 ceiling, 6-9 columns
+ * (one ID each: overlapping silhouettes must not be filtered together), 10 plinth,
+ * 11 sphere, 12 emissive window panel.
+ * ------------------------------------------------------------------------- */
+ABT_INLINE HitInfo os_trace_scene_f(v3 ro, v3 rd) {
+  HitInfo best = os_hit_none();
+  v3 inv_rd = os_make_inv_rd(rd);
+  os_isect_plane_y(ro, rd, 0.0f, 1.0f, 1.0f, &best);
+  os_isect_plane_y(ro, rd, 3.0f, -1.0f, 5.0f, &best);
+  os_isect_plane_x(ro, rd, -2.40f, 1.0f, 2.0f, &best);
+  os_isect_plane_x(ro, rd, 2.40f, -1.0f, 4.0f, &best);
+  os_isect_plane_z(ro, rd, -7.50f, 1.0f, 3.0f, &best);
+  os_isect_cylinder_y(ro, rd, -0.90f, -1.20f, 0.20f, 0.0f, 3.0f, 6.0f, &best);
+  os_isect_cylinder_y(ro, rd, -0.90f, -2.60f, 0.20f, 0.0f, 3.0f, 7.0f, &best);
+  os_isect_cylinder_y(ro, rd, -0.90f, -4.00f, 0.20f, 0.0f, 3.0f, 8.0f, &best);
+  os_isect_cylinder_y(ro, rd, -0.90f, -5.40f, 0.20f, 0.0f, 3.0f, 9.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(0.60f, 0.0f, -6.30f), mk3(1.40f, 0.50f, -5.50f), 10.0f, &best);
+  os_isect_sphere(ro, rd, mk3(1.00f, 1.05f, -5.90f), 0.55f, 11.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(-2.50f, 1.00f, -3.20f), mk3(-2.36f, 2.50f, -2.00f), 12.0f, &best);
+  return best;
+}
+
+ABT_INLINE int os_shadow_scene_f(v3 ro, v3 rd, float max_t) {
+  if (os_isect_cylinder_y_any(ro, rd, -0.90f, -1.20f, 0.20f, 0.0f, 3.0f, max_t)) return 1;
+  if (os_isect_cylinder_y_any(ro, rd, -0.90f, -2.60f, 0.20f, 0.0f, 3.0f, max_t)) return 1;
+  if (os_isect_cylinder_y_any(ro, rd, -0.90f, -4.00f, 0.20f, 0.0f, 3.0f, max_t)) return 1;
+  if (os_isect_cylinder_y_any(ro, rd, -0.90f, -5.40f, 0.20f, 0.0f, 3.0f, max_t)) return 1;
+  if (os_isect_box_any(ro, os_make_inv_rd(rd), mk3(0.60f, 0.0f, -6.30f), mk3(1.40f, 0.50f, -5.50f), max_t)) return 1;
+  if (os_isect_sphere_any(ro, rd, mk3(1.00f, 1.05f, -5.90f), 0.55f, max_t)) return 1;
+  return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Scene G "Still life": a table carrying three spheres, a cube and a tall carton, seen
+ * close up; lit by an off-centre ceiling softbox so shadows fall across the table top.
+ * Surface IDs: 1 floor, 2 left wall, 3 back wall, 4 right wall, 5 ceiling, 6 table top,
+ * 7 front legs, 8 back legs, 9 red sphere, 10 green sphere, 11 white sphere,
+ * 12 emissive softbox, 13 cube, 14 carton.
+ * ------------------------------------------------------------------------- */
+ABT_INLINE HitInfo os_trace_scene_g(v3 ro, v3 rd) {
+  HitInfo best = os_hit_none();
+  v3 inv_rd = os_make_inv_rd(rd);
+  os_isect_plane_y(ro, rd, 0.0f, 1.0f, 1.0f, &best);
+  os_isect_plane_y(ro, rd, 3.0f, -1.0f, 5.0f, &best);
+  os_isect_plane_x(ro, rd, -3.20f, 1.0f, 2.0f, &best);
+  os_isect_plane_x(ro, rd, 3.20f, -1.0f, 4.0f, &best);
+  os_isect_plane_z(ro, rd, -3.40f, 1.0f, 3.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(-1.10f, 0.70f, -2.60f), mk3(1.10f, 0.78f, -1.40f), 6.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(-1.04f, 0.0f, -1.54f), mk3(-0.96f, 0.70f, -1.46f), 7.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(0.96f, 0.0f, -1.54f), mk3(1.04f, 0.70f, -1.46f), 7.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(-1.04f, 0.0f, -2.54f), mk3(-0.96f, 0.70f, -2.46f), 8.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(0.96f, 0.0f, -2.54f), mk3(1.04f, 0.70f, -2.46f), 8.0f, &best);
+  os_isect_sphere(ro, rd, mk3(-0.55f, 1.08f, -2.10f), 0.30f, 9.0f, &best);
+  os_isect_sphere(ro, rd, mk3(-0.15f, 0.98f, -1.70f), 0.20f, 10.0f, &best);
+  os_isect_sphere(ro, rd, mk3(0.35f, 0.90f, -1.60f), 0.12f, 11.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(0.55f, 0.78f, -2.20f), mk3(0.95f, 1.18f, -1.80f), 13.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(0.10f, 0.78f, -2.50f), mk3(0.30f, 1.50f, -2.30f), 14.0f, &best);
+  os_isect_box_face(ro, rd, inv_rd, mk3(-1.50f, 2.94f, -1.60f), mk3(-0.30f, 3.10f, -0.60f), 12.0f, &best);
+  return best;
+}
+
+ABT_INLINE int os_shadow_scene_g(v3 ro, v3 rd, float max_t) {
+  v3 inv_rd = os_make_inv_rd(rd);
+  if (os_isect_sphere_any(ro, rd, mk3(-0.55f, 1.08f, -2.10f), 0.30f, max_t)) return 1;
+  if (os_isect_sphere_any(ro, rd, mk3(-0.15f, 0.98f, -1.70f), 0.20f, max_t)) return 1;
+  if (os_isect_sphere_any(ro, rd, mk3(0.35f, 0.90f, -1.60f), 0.12f, max_t)) return 1;
+  if (os_isect_box_any(ro, inv_rd, mk3(-1.10f, 0.70f, -2.60f), mk3(1.10f, 0.78f, -1.40f), max_t)) return 1;
+  if (os_isect_box_any(ro, inv_rd, mk3(0.55f, 0.78f, -2.20f), mk3(0.95f, 1.18f, -1.80f), max_t)) return 1;
+  if (os_isect_box_any(ro, inv_rd, mk3(0.10f, 0.78f, -2.50f), mk3(0.30f, 1.50f, -2.30f), max_t)) return 1;
+  if (os_isect_box_any(ro, inv_rd, mk3(-1.04f, 0.0f, -1.54f), mk3(-0.96f, 0.70f, -1.46f), max_t)) return 1;
+  if (os_isect_box_any(ro, inv_rd, mk3(0.96f, 0.0f, -1.54f), mk3(1.04f, 0.70f, -1.46f), max_t)) return 1;
+  if (os_isect_box_any(ro, inv_rd, mk3(-1.04f, 0.0f, -2.54f), mk3(-0.96f, 0.70f, -2.46f), max_t)) return 1;
+  if (os_isect_box_any(ro, inv_rd, mk3(0.96f, 0.0f, -2.54f), mk3(1.04f, 0.70f, -2.46f), max_t)) return 1;
+  return 0;
+}
+
+/* Showcase scene dispatch (the scene id is a compile-time constant in each Metal entry kernel) */
+ABT_INLINE HitInfo os_trace_show(int sc, v3 ro, v3 rd) {
+  if (sc == SCENE_F) return os_trace_scene_f(ro, rd);
+  if (sc == SCENE_G) return os_trace_scene_g(ro, rd);
+  return os_trace_scene_e(ro, rd);
+}
+
+ABT_INLINE int os_shadow_show(int sc, v3 ro, v3 rd, float max_t) {
+  if (sc == SCENE_F) return os_shadow_scene_f(ro, rd, max_t);
+  if (sc == SCENE_G) return os_shadow_scene_g(ro, rd, max_t);
+  return os_shadow_scene_e(ro, rd, max_t);
+}
+
+/* =========================================================================
+ * Triangle-mesh ray tracing (Scene H). The BVH is built on the host (src/mesh_bvh.h) and reaches
+ * both back ends as three flat float4 arrays:
+ *   nodes : 2 per node   (bmin.xyz, A) (bmax.xyz, B); interior: A = left child (right = A + 1),
+ *           B = 0; leaf: A = first triangle, B = triangle count (> 0). Indices are exact floats.
+ *   tri_a : 3 per triangle (v0, e1, e2)      tri_n : 3 per triangle (vertex normals)
+ * Stack-based nearest-first traversal with Moller-Trumbore intersection; identical arithmetic
+ * on the CPU reference and in the (safe-math) Metal Pass 1 kernels.
+ * ========================================================================= */
+typedef struct {
+  float t;      /* hit distance (or the t_max passed in when nothing was hit) */
+  float bu;     /* barycentric weight of vertex 1 */
+  float bv;     /* barycentric weight of vertex 2 */
+  int   tri;    /* triangle index in leaf order, -1 = miss */
+} MeshHit;
+
+/* Entry distance into an AABB, or OS_INF when the ray misses it or it lies beyond t_max */
+ABT_INLINE float os_aabb_entry(v4 n0, v4 n1, v3 ro, v3 inv_rd, float t_max) {
+  float tx1 = (n0.x - ro.x) * inv_rd.x, tx2 = (n1.x - ro.x) * inv_rd.x;
+  float ty1 = (n0.y - ro.y) * inv_rd.y, ty2 = (n1.y - ro.y) * inv_rd.y;
+  float tz1 = (n0.z - ro.z) * inv_rd.z, tz2 = (n1.z - ro.z) * inv_rd.z;
+  float tmin = f_max(f_max(f_min(tx1, tx2), f_min(ty1, ty2)), f_min(tz1, tz2));
+  float tmax = f_min(f_min(f_max(tx1, tx2), f_max(ty1, ty2)), f_max(tz1, tz2));
+  if (tmax < 0.0f || tmin > tmax || tmin >= t_max) return OS_INF;
+  return tmin;
+}
+
+/* Nearest hit in (1e-4, t_max); with any_hit != 0 returns at the first hit found (shadow rays) */
+ABT_INLINE MeshHit os_mesh_trace(ABT_RO_GLOBAL v4* nodes, ABT_RO_GLOBAL v4* tri_a,
+                                 v3 ro, v3 rd, float t_max, int any_hit) {
+  MeshHit best;
+  best.t = t_max; best.bu = 0.0f; best.bv = 0.0f; best.tri = -1;
+  v3 inv_rd = os_make_inv_rd(rd);
+  int   stack_n[48];
+  float stack_t[48];
+  int sp = 0;
+  int ni = 0;
+  if (os_aabb_entry(nodes[0], nodes[1], ro, inv_rd, best.t) >= OS_INF) return best;
+  for (int guard = 0; guard < 65536; ++guard) {   /* hard bound on visited nodes */
+    v4 n0 = nodes[ni * 2];
+    v4 n1 = nodes[ni * 2 + 1];
+    int descend = 0;
+    if (n1.w > 0.5f) {
+      int first = (int)n0.w;
+      int count = (int)n1.w;
+      for (int k = 0; k < count; ++k) {
+        int ti = first + k;
+        v4 a0 = tri_a[ti * 3], a1 = tri_a[ti * 3 + 1], a2 = tri_a[ti * 3 + 2];
+        v3 e1 = mk3(a1.x, a1.y, a1.z);
+        v3 e2 = mk3(a2.x, a2.y, a2.z);
+        v3 pv = v3_cross(rd, e2);
+        float det = v3_dot(e1, pv);
+        if (f_abs(det) < 1e-12f) continue;
+        float inv_det = 1.0f / det;
+        v3 tv = mk3(ro.x - a0.x, ro.y - a0.y, ro.z - a0.z);
+        float bu = v3_dot(tv, pv) * inv_det;
+        if (bu < 0.0f || bu > 1.0f) continue;
+        v3 qv = v3_cross(tv, e1);
+        float bv = v3_dot(rd, qv) * inv_det;
+        if (bv < 0.0f || bu + bv > 1.0f) continue;
+        float t = v3_dot(e2, qv) * inv_det;
+        if (t > 1e-4f && t < best.t) {
+          best.t = t; best.bu = bu; best.bv = bv; best.tri = ti;
+          if (any_hit != 0) return best;
+        }
+      }
+    } else {
+      int l = (int)n0.w;
+      float tl = os_aabb_entry(nodes[l * 2], nodes[l * 2 + 1], ro, inv_rd, best.t);
+      float tr = os_aabb_entry(nodes[l * 2 + 2], nodes[l * 2 + 3], ro, inv_rd, best.t);
+      if (tl < OS_INF && tr < OS_INF) {
+        int near_n = (tl <= tr) ? l : (l + 1);
+        int far_n  = (tl <= tr) ? (l + 1) : l;
+        if (sp < 48) { stack_n[sp] = far_n; stack_t[sp] = f_max(tl, tr); ++sp; }
+        ni = near_n; descend = 1;
+      } else if (tl < OS_INF) {
+        ni = l; descend = 1;
+      } else if (tr < OS_INF) {
+        ni = l + 1; descend = 1;
+      }
+    }
+    if (descend != 0) continue;
+    /* pop the next subtree that can still contain a closer hit */
+    int found = 0;
+    while (sp > 0) {
+      --sp;
+      if (stack_t[sp] < best.t) { ni = stack_n[sp]; found = 1; break; }
+    }
+    if (found == 0) break;
+  }
+  return best;
+}
+
+/* Interpolated vertex normal of a hit, flipped to face the incoming ray (two-sided surfaces) */
+ABT_INLINE v3 os_mesh_normal(ABT_RO_GLOBAL v4* tri_n, MeshHit h, v3 rd) {
+  v4 n0 = tri_n[h.tri * 3], n1 = tri_n[h.tri * 3 + 1], n2 = tri_n[h.tri * 3 + 2];
+  float w0 = 1.0f - h.bu - h.bv;
+  v3 n = v3_norm(mk3(n0.x * w0 + n1.x * h.bu + n2.x * h.bv,
+                     n0.y * w0 + n1.y * h.bu + n2.y * h.bv,
+                     n0.z * w0 + n1.z * h.bu + n2.z * h.bv));
+  return (v3_dot(n, rd) > 0.0f) ? v3_scale(n, -1.0f) : n;
+}
+
+/* Geometric (flat) triangle normal of a hit, flipped to face the incoming ray. Secondary rays start
+ * from a point offset along THIS normal: offsetting along the interpolated shading normal can put
+ * the origin inside the surface near silhouettes and leaves dark dots there (shadow terminator). */
+ABT_INLINE v3 os_mesh_geo_normal(ABT_RO_GLOBAL v4* tri_a, MeshHit h, v3 rd) {
+  v4 a1 = tri_a[h.tri * 3 + 1], a2 = tri_a[h.tri * 3 + 2];
+  v3 n = v3_norm(v3_cross(mk3(a1.x, a1.y, a1.z), mk3(a2.x, a2.y, a2.z)));
+  return (v3_dot(n, rd) > 0.0f) ? v3_scale(n, -1.0f) : n;
+}
+
 /* Trace primary or shadow ray in Scene A, B, C, or D */
 ABT_INLINE HitInfo os_trace_scene(int scene_id, v3 ro, v3 rd) {
   if (scene_id == SCENE_A) return os_trace_scene_a(ro, rd);
@@ -1497,6 +1788,397 @@ ABT_INLINE Pass1Out os_eval_scene_c_ray(ABT_CONST FrameUniforms* u, v3 ro, v3 rd
   return o;
 }
 
+/* =========================================================================
+ * Scene E "Gallery" albedo + single-ray evaluation (showcase; not in the oracle)
+ * ========================================================================= */
+ABT_INLINE v3 os_scene_e_albedo(const HitInfo h, v2 fp, int mode) {
+  if (h.sid == 1.0f) {
+    /* Slate / warm-marble checker floor (analytic ADAA2 in OS-ABT, point-sampled otherwise) */
+    float P = 0.60f;
+    float chk;
+    if (mode == MODE_OSABT) {
+      float ax = os_adaa2_step(h.pos.x, fp.x, fp.x, P, 0.0f, 0.5f * P);
+      float az = os_adaa2_step(h.pos.z, fp.y, fp.y, P, 0.0f, 0.5f * P);
+      chk = ax + az - 2.0f * ax * az;
+    } else {
+      float a = h.pos.x / P; a -= f_floor(a);
+      float b = h.pos.z / P; b -= f_floor(b);
+      chk = ((a < 0.5f) ^ (b < 0.5f)) ? 1.0f : 0.0f;
+    }
+    return v3_mix(mk3(0.20f, 0.21f, 0.24f), mk3(0.74f, 0.70f, 0.63f), chk);
+  } else if (h.sid == 2.0f) {
+    return mk3(0.70f, 0.22f, 0.16f);   /* left wall: terracotta */
+  } else if (h.sid == 3.0f) {
+    /* Back wall: two-tone vertical panelling */
+    float P = 0.55f;
+    float s;
+    if (mode == MODE_OSABT) {
+      float hx = f_clamp(fp.x, 1e-4f, 0.3f);
+      s = os_adaa2_step(h.pos.x, hx, hx, P, 0.0f, 0.5f * P);
+    } else {
+      float a = h.pos.x / P; a -= f_floor(a);
+      s = (a < 0.5f) ? 1.0f : 0.0f;
+    }
+    return v3_mix(mk3(0.60f, 0.64f, 0.68f), mk3(0.80f, 0.78f, 0.72f), s);
+  } else if (h.sid == 4.0f) {
+    return mk3(0.14f, 0.48f, 0.46f);   /* right wall: teal */
+  } else if (h.sid == 5.0f) {
+    return mk3(0.90f, 0.90f, 0.88f);   /* ceiling */
+  } else if (h.sid == 6.0f) {
+    return mk3(0.82f, 0.80f, 0.74f);   /* ivory sphere */
+  } else if (h.sid == 7.0f) {
+    return mk3(0.16f, 0.30f, 0.72f);   /* blue sphere */
+  } else if (h.sid == 8.0f) {
+    return mk3(0.50f, 0.42f, 0.36f);   /* warm stone pedestal */
+  } else if (h.sid == 9.0f) {
+    return mk3(0.92f, 0.36f, 0.05f);   /* amber sphere */
+  }
+  return mk3(0.16f, 0.10f, 0.07f);     /* dark walnut columns */
+}
+
+ABT_INLINE v3 os_scene_f_albedo(const HitInfo h, v2 fp, int mode) {
+  if (h.sid == 1.0f) {
+    /* Low-contrast pale stone tiles, so the column shadows are the dominant floor pattern */
+    float P = 0.90f;
+    float chk;
+    if (mode == MODE_OSABT) {
+      float ax = os_adaa2_step(h.pos.x, fp.x, fp.x, P, 0.0f, 0.5f * P);
+      float az = os_adaa2_step(h.pos.z, fp.y, fp.y, P, 0.0f, 0.5f * P);
+      chk = ax + az - 2.0f * ax * az;
+    } else {
+      float a = h.pos.x / P; a -= f_floor(a);
+      float b = h.pos.z / P; b -= f_floor(b);
+      chk = ((a < 0.5f) ^ (b < 0.5f)) ? 1.0f : 0.0f;
+    }
+    return v3_mix(mk3(0.58f, 0.57f, 0.56f), mk3(0.68f, 0.67f, 0.64f), chk);
+  } else if (h.sid == 2.0f) {
+    return mk3(0.20f, 0.34f, 0.44f);   /* window wall: deep blue-green (never directly lit) */
+  } else if (h.sid == 3.0f) {
+    return mk3(0.62f, 0.30f, 0.22f);   /* end wall: terracotta */
+  } else if (h.sid == 4.0f) {
+    return mk3(0.80f, 0.74f, 0.62f);   /* right wall: cream, catches the column shadows */
+  } else if (h.sid == 5.0f) {
+    return mk3(0.85f, 0.84f, 0.80f);   /* ceiling */
+  } else if (h.sid == 10.0f) {
+    return mk3(0.25f, 0.24f, 0.24f);   /* dark plinth */
+  } else if (h.sid == 11.0f) {
+    return mk3(0.75f, 0.14f, 0.10f);   /* red sphere */
+  }
+  return mk3(0.80f, 0.78f, 0.74f);     /* stone columns */
+}
+
+ABT_INLINE v3 os_scene_g_albedo(const HitInfo h, v2 fp, int mode) {
+  if (h.sid == 1.0f) {
+    /* Wood planks running toward the back wall */
+    float P = 0.36f;
+    float s;
+    if (mode == MODE_OSABT) {
+      s = os_adaa2_step(h.pos.x, fp.x, fp.x, P, 0.0f, 0.5f * P);
+    } else {
+      float a = h.pos.x / P; a -= f_floor(a);
+      s = (a < 0.5f) ? 1.0f : 0.0f;
+    }
+    return v3_mix(mk3(0.36f, 0.22f, 0.13f), mk3(0.52f, 0.34f, 0.20f), s);
+  } else if (h.sid == 2.0f || h.sid == 4.0f) {
+    return mk3(0.75f, 0.72f, 0.68f);   /* side walls */
+  } else if (h.sid == 3.0f) {
+    return mk3(0.42f, 0.52f, 0.56f);   /* back wall: grey-blue */
+  } else if (h.sid == 5.0f) {
+    return mk3(0.86f, 0.86f, 0.84f);   /* ceiling */
+  } else if (h.sid == 6.0f) {
+    return mk3(0.72f, 0.60f, 0.44f);   /* pale oak table top */
+  } else if (h.sid == 7.0f || h.sid == 8.0f) {
+    return mk3(0.22f, 0.18f, 0.15f);   /* dark legs */
+  } else if (h.sid == 9.0f) {
+    return mk3(0.75f, 0.12f, 0.10f);   /* red sphere */
+  } else if (h.sid == 10.0f) {
+    return mk3(0.50f, 0.70f, 0.38f);   /* green sphere */
+  } else if (h.sid == 11.0f) {
+    return mk3(0.88f, 0.87f, 0.84f);   /* white sphere */
+  } else if (h.sid == 13.0f) {
+    return mk3(0.20f, 0.36f, 0.70f);   /* blue cube */
+  }
+  return mk3(0.90f, 0.72f, 0.24f);     /* yellow carton */
+}
+
+ABT_INLINE v3 os_show_albedo(int sc, const HitInfo h, v2 fp, int mode) {
+  if (sc == SCENE_F) return os_scene_f_albedo(h, fp, mode);
+  if (sc == SCENE_G) return os_scene_g_albedo(h, fp, mode);
+  return os_scene_e_albedo(h, fp, mode);
+}
+
+/* Each showcase scene has one axis-aligned rectangular area light with a visible emissive panel
+ * (surface ID 12). One uniform light sample gives irradiance-over-pi
+ *   K * cos_surface * cos_light / d^2,   K = L * Area / pi,
+ * and the panel itself shows the matching radiance L = K * pi / Area.
+ *   E: ceiling panel   x in [-0.65, 0.65], z in [-2.35, -1.35], y = 2.94, facing down  (1.3 m^2)
+ *   F: window panel    y in [1.00, 2.50],  z in [-3.20, -2.00], x = -2.36, facing +x   (1.8 m^2)
+ *   G: ceiling softbox x in [-1.50, -0.30], z in [-1.60, -0.60], y = 2.94, facing down (1.2 m^2)
+ *   H: sky portal      x in [-8.00, 7.00],  z in [-2.00, 2.00],  y = 11.8, facing down  (60 m^2),
+ *      spanning the roof opening of the Sponza atrium; the roof itself shadows the excess. */
+ABT_INLINE v3 os_show_light_pos(int sc, v2 xi) {
+  if (sc == SCENE_F) return mk3(-2.36f, 1.00f + 1.50f * xi.x, -3.20f + 1.20f * xi.y);
+  if (sc == SCENE_G) return mk3(-1.50f + 1.20f * xi.x, 2.94f, -1.60f + 1.00f * xi.y);
+  if (sc == SCENE_H) return mk3(-8.00f + 15.0f * xi.x, 11.8f, -2.00f + 4.00f * xi.y);
+  return mk3(-0.65f + 1.30f * xi.x, 2.94f, -2.35f + 1.00f * xi.y);
+}
+ABT_INLINE v3 os_show_light_nrm(int sc) {
+  return (sc == SCENE_F) ? mk3(1.0f, 0.0f, 0.0f) : mk3(0.0f, -1.0f, 0.0f);
+}
+ABT_INLINE float os_show_light_k(int sc) {
+  return (sc == SCENE_F) ? 25.0f : ((sc == SCENE_G) ? 9.0f : ((sc == SCENE_H) ? 280.0f : 9.5f));
+}
+ABT_INLINE float os_show_light_le(int sc) {
+  return (sc == SCENE_F) ? 43.633f : ((sc == SCENE_G) ? 23.562f : ((sc == SCENE_H) ? 14.661f : 22.958f));
+}
+
+/* Single-ray evaluation shared by the showcase scenes E, F and G */
+ABT_INLINE Pass1Out os_eval_show_ray(ABT_CONST FrameUniforms* u, v3 ro, v3 rd,
+                                    float px, float py, int mode, int sidx, int sc) {
+  Pass1Out o;
+  o.direct = mk4(0.0f, 0.0f, 0.0f, 0.0f);
+  HitInfo h = os_trace_show(sc, ro, rd);
+  if (!h.hit) {
+    o.irrad  = mk4(0.0f, 0.0f, 0.0f, 0.0f);
+    o.albedo = mk4(1.0f, 1.0f, 1.0f, 0.0f);
+    o.gbuf_n = mk4(0.0f, 0.0f, 0.0f, 0.0f);
+    o.gbuf_p = mk4(0.0f, 0.0f, 0.0f, 1.0f);
+    return o;
+  }
+  float cos_t = f_clamp(v3_dot(h.nrm, v3_scale(rd, -1.0f)), 0.0f, 1.0f);
+  o.gbuf_n = mk4(h.nrm.x, h.nrm.y, h.nrm.z, h.sid);
+  o.gbuf_p = mk4(h.pos.x, h.pos.y, h.pos.z, cos_t);
+  v3 lcol = v3_scale(mk3(u->light_color[0], u->light_color[1], u->light_color[2]), u->light_color[3]);
+  float light_k = os_show_light_k(sc);
+  v3 light_n = os_show_light_nrm(sc);
+
+  if (h.sid == 12.0f) {
+    /* Emissive panel: final radiance, bypasses demodulation and filtering (own surface ID) */
+    float le = os_show_light_le(sc);
+    o.irrad  = mk4(lcol.x * le, lcol.y * le, lcol.z * le, 0.0f);
+    o.albedo = mk4(1.0f, 1.0f, 1.0f, 0.0f);
+    return o;
+  }
+
+  v2 fp = (h.sid == 1.0f) ? os_floor_footprint(u, px, py, h.pos)
+        : (sc == SCENE_E && h.sid == 3.0f) ? os_wallz_footprint(u, px, py, -3.80f, h.pos)
+        : mk2(0.015f, 0.015f);
+  v3 alb = os_show_albedo(sc, h, fp, mode);
+  v3 hit_orig = v3_add(h.pos, v3_scale(h.nrm, 2e-3f));
+
+  /* 1 spp next-event estimation on the rectangular light -> stochastic soft shadows */
+  v2 xi_l = os_sample_2d((int)px, (int)py, u->frame_idx, sidx * 2);
+  v3 to_l = v3_sub(os_show_light_pos(sc, xi_l), h.pos);
+  float d2 = f_max(v3_dot(to_l, to_l), 0.05f);
+  float dist_l = f_sqrt(d2);
+  v3 ldir = v3_scale(to_l, 1.0f / dist_l);
+  float g = f_max(0.0f, v3_dot(h.nrm, ldir)) * f_max(0.0f, -v3_dot(ldir, light_n));
+  float vis = (g > 0.0f) ? (os_shadow_show(sc, hit_orig, ldir, dist_l - 1e-3f) ? 0.0f : 1.0f) : 0.0f;
+  v3 direct = v3_scale(lcol, light_k * g * vis / d2);
+
+  /* 1 spp cosine-weighted one-bounce GI; the bounce point is lit from the light centre with a
+   * shadow ray, plus a constant fill standing in for the deeper bounces (the steady-state indirect
+   * irradiance rho*D/(1-rho) of these rooms is ~0.4 in these units; 0.15 keeps shadows readable
+   * and allows for the open side).
+   * A bounce ray that reaches the panel contributes nothing: the light is already counted by the
+   * direct sample. */
+  v2 xi_g = os_sample_2d((int)px, (int)py, u->frame_idx, sidx * 2 + 1);
+  v3 bdir = os_cosine_hemi(h.nrm, xi_g);
+  HitInfo bh = os_trace_show(sc, hit_orig, bdir);
+  v3 bounce = mk3(0.0f, 0.0f, 0.0f);
+  if (bh.hit && bh.sid != 12.0f) {
+    v3 balb = os_show_albedo(sc, bh, mk2(0.05f, 0.05f), MODE_ABLATED);
+    v3 b_tol = v3_sub(os_show_light_pos(sc, mk2(0.5f, 0.5f)), bh.pos);
+    float b_d2 = f_max(v3_dot(b_tol, b_tol), 0.05f);
+    float b_dl = f_sqrt(b_d2);
+    v3 b_ldir = v3_scale(b_tol, 1.0f / b_dl);
+    float b_g = f_max(0.0f, v3_dot(bh.nrm, b_ldir)) * f_max(0.0f, -v3_dot(b_ldir, light_n));
+    v3 b_orig = v3_add(bh.pos, v3_scale(bh.nrm, 2e-3f));
+    float b_vis = (b_g > 0.0f) ? (os_shadow_show(sc, b_orig, b_ldir, b_dl - 1e-3f) ? 0.0f : 1.0f) : 0.0f;
+    float b_e = light_k * b_g * b_vis / b_d2 + 0.15f;
+    bounce = v3_mul(balb, v3_scale(lcol, b_e));
+  }
+
+  v3 E = v3_add(direct, bounce);
+  if (mode == MODE_GT) {
+    v3 col = v3_mul(alb, E);
+    o.irrad  = mk4(col.x, col.y, col.z, 0.0f);
+    o.albedo = mk4(1.0f, 1.0f, 1.0f, 0.0f);
+  } else {
+    o.irrad  = mk4(E.x, E.y, E.z, 1.0f);
+    o.albedo = mk4(alb.x, alb.y, alb.z, 1.0f);
+  }
+  return o;
+}
+
+/* =========================================================================
+ * Scene H "Sponza": single-ray evaluation over the triangle mesh. Lighting is the showcase model
+ * (one rectangular area light - here the sky through the roof opening - sampled once, one
+ * cosine-weighted bounce lit from the light centre, constant fill for deeper bounces) plus a
+ * directional sun sampled once at the primary hit and at the bounce point. The source asset has one material
+ * and no textures, so the albedo is uniform limestone with a darker floor, and every mesh pixel
+ * carries surface ID 1: the filters separate surfaces by normal and plane distance alone.
+ * A ray that leaves the mesh has gone up through the roof opening and shows the sky.
+ * ========================================================================= */
+ABT_INLINE v3 os_scene_h_albedo(v3 pos, v3 n) {
+  if (n.y > 0.9f && pos.y < 0.3f) return mk3(0.46f, 0.43f, 0.40f);   /* ground-floor paving */
+  return mk3(0.74f, 0.70f, 0.62f);                                   /* limestone */
+}
+
+/* Sun for Scene H: a warm directional light about 38 deg off vertical that shines down the long
+ * axis of the atrium (the roof opening is 14 m long but only 3 m wide), so it lands as one broad
+ * shape on the far end wall and the floor in front of it, grazing the -z wall on the way.
+ * xi jitters the direction inside a 1.15 deg cone (soft shadow edges);
+ * xi = (0, 0) gives the central direction. OS_H_SUN_E is the sun's irradiance-over-pi on a
+ * surface facing it, in the same units as the sky portal (~1 on the floor). */
+#define OS_H_SUN_E 12.0f
+ABT_INLINE v3 os_h_sun_dir(v2 xi) {
+  v3 l = mk3(-0.60362f, 0.78471f, 0.14085f);         /* normalize(-0.60, 0.78, 0.14) */
+  v3 t = v3_norm(v3_cross(l, mk3(1.0f, 0.0f, 0.0f)));
+  v3 b = v3_cross(l, t);
+  float r = 0.02f * f_sqrt(f_clamp(xi.x, 0.0f, 1.0f));
+  float phi = OS_TAU * xi.y;
+  return v3_norm(v3_add(l, v3_add(v3_scale(t, r * f_cos(phi)), v3_scale(b, r * f_sin(phi)))));
+}
+ABT_INLINE v3 os_h_sun_color(void) { return mk3(1.0f, 0.78f, 0.52f); }
+/* Radiance shown where the camera sees the sky directly. Display only: a deep blue well below the
+ * portal's own radiance, so the opening reads as sky instead of clipping to white. */
+ABT_INLINE v3 os_h_sky_display(void) { return mk3(1.40f, 2.30f, 4.00f); }
+
+ABT_INLINE Pass1Out os_eval_mesh_ray(ABT_CONST FrameUniforms* u, v3 ro, v3 rd,
+                                    float px, float py, int mode, int sidx,
+                                    ABT_RO_GLOBAL v4* nodes, ABT_RO_GLOBAL v4* tri_a, ABT_RO_GLOBAL v4* tri_n) {
+  Pass1Out o;
+  o.direct = mk4(0.0f, 0.0f, 0.0f, 0.0f);
+  v3 lcol = v3_scale(mk3(u->light_color[0], u->light_color[1], u->light_color[2]), u->light_color[3]);
+  float light_k = os_show_light_k(SCENE_H);
+  v3 light_n = os_show_light_nrm(SCENE_H);
+  MeshHit h = os_mesh_trace(nodes, tri_a, ro, rd, OS_INF, 0);
+  if (h.tri < 0) {
+    v3 sky = v3_scale(os_h_sky_display(), u->light_color[3]);
+    o.irrad  = mk4(sky.x, sky.y, sky.z, 0.0f);
+    o.albedo = mk4(1.0f, 1.0f, 1.0f, 0.0f);
+    o.gbuf_n = mk4(0.0f, 0.0f, 0.0f, 0.0f);
+    o.gbuf_p = mk4(0.0f, 0.0f, 0.0f, 1.0f);
+    return o;
+  }
+  v3 pos = v3_add(ro, v3_scale(rd, h.t));
+  v3 nrm = os_mesh_normal(tri_n, h, rd);
+  float cos_t = f_clamp(v3_dot(nrm, v3_scale(rd, -1.0f)), 0.0f, 1.0f);
+  o.gbuf_n = mk4(nrm.x, nrm.y, nrm.z, 1.0f);
+  o.gbuf_p = mk4(pos.x, pos.y, pos.z, cos_t);
+  v3 alb = os_scene_h_albedo(pos, nrm);
+  v3 hit_orig = v3_add(pos, v3_scale(os_mesh_geo_normal(tri_a, h, rd), 4e-3f));
+
+  /* 1 spp next-event estimation on the sky portal -> stochastic soft shadows */
+  v2 xi_l = os_sample_2d((int)px, (int)py, u->frame_idx, sidx * 2);
+  v3 to_l = v3_sub(os_show_light_pos(SCENE_H, xi_l), pos);
+  float d2 = f_max(v3_dot(to_l, to_l), 0.05f);
+  float dist_l = f_sqrt(d2);
+  v3 ldir = v3_scale(to_l, 1.0f / dist_l);
+  float g = f_max(0.0f, v3_dot(nrm, ldir)) * f_max(0.0f, -v3_dot(ldir, light_n));
+  float vis = 0.0f;
+  if (g > 0.0f) {
+    MeshHit sh = os_mesh_trace(nodes, tri_a, hit_orig, ldir, dist_l - 1e-3f, 1);
+    vis = (sh.tri < 0) ? 1.0f : 0.0f;
+  }
+  v3 direct = v3_scale(lcol, light_k * g * vis / d2);
+
+  /* 1 spp sun sample (jittered inside its cone) -> hard-edged shadow shapes with a thin penumbra */
+  v3 sun_col = v3_scale(os_h_sun_color(), OS_H_SUN_E * u->light_color[3]);
+  v3 sdir = os_h_sun_dir(os_sample_2d((int)px, (int)py, u->frame_idx, 200 + sidx));
+  float s_ndl = f_max(0.0f, v3_dot(nrm, sdir));
+  if (s_ndl > 0.0f) {
+    MeshHit ss = os_mesh_trace(nodes, tri_a, hit_orig, sdir, OS_INF, 1);
+    if (ss.tri < 0) direct = v3_add(direct, v3_scale(sun_col, s_ndl));
+  }
+
+  /* 1 spp cosine-weighted one-bounce GI (bounce point lit from the portal centre) + constant fill */
+  v2 xi_g = os_sample_2d((int)px, (int)py, u->frame_idx, sidx * 2 + 1);
+  v3 bdir = os_cosine_hemi(nrm, xi_g);
+  MeshHit bh = os_mesh_trace(nodes, tri_a, hit_orig, bdir, OS_INF, 0);
+  v3 bounce = mk3(0.0f, 0.0f, 0.0f);
+  if (bh.tri >= 0) {
+    v3 bpos = v3_add(hit_orig, v3_scale(bdir, bh.t));
+    v3 bnrm = os_mesh_normal(tri_n, bh, bdir);
+    v3 b_orig = v3_add(bpos, v3_scale(os_mesh_geo_normal(tri_a, bh, bdir), 4e-3f));
+    v3 balb = os_scene_h_albedo(bpos, bnrm);
+    v3 b_tol = v3_sub(os_show_light_pos(SCENE_H, mk2(0.5f, 0.5f)), bpos);
+    float b_d2 = f_max(v3_dot(b_tol, b_tol), 0.05f);
+    float b_dl = f_sqrt(b_d2);
+    v3 b_ldir = v3_scale(b_tol, 1.0f / b_dl);
+    float b_g = f_max(0.0f, v3_dot(bnrm, b_ldir)) * f_max(0.0f, -v3_dot(b_ldir, light_n));
+    float b_vis = 0.0f;
+    if (b_g > 0.0f) {
+      MeshHit bs = os_mesh_trace(nodes, tri_a, b_orig, b_ldir, b_dl - 1e-3f, 1);
+      b_vis = (bs.tri < 0) ? 1.0f : 0.0f;
+    }
+    float b_e = light_k * b_g * b_vis / b_d2 + 0.15f;
+    v3 b_in = v3_scale(lcol, b_e);
+    /* sunlit surfaces are the strong secondary sources: shadow-test the sun at the bounce point */
+    v3 b_sdir = os_h_sun_dir(mk2(0.0f, 0.0f));
+    float b_sndl = f_max(0.0f, v3_dot(bnrm, b_sdir));
+    if (b_sndl > 0.0f) {
+      MeshHit bss = os_mesh_trace(nodes, tri_a, b_orig, b_sdir, OS_INF, 1);
+      if (bss.tri < 0) b_in = v3_add(b_in, v3_scale(sun_col, b_sndl));
+    }
+    bounce = v3_mul(balb, b_in);
+  }
+
+  v3 E = v3_add(direct, bounce);
+  if (mode == MODE_GT) {
+    v3 col = v3_mul(alb, E);
+    o.irrad  = mk4(col.x, col.y, col.z, 0.0f);
+    o.albedo = mk4(1.0f, 1.0f, 1.0f, 0.0f);
+  } else {
+    o.irrad  = mk4(E.x, E.y, E.z, 1.0f);
+    o.albedo = mk4(alb.x, alb.y, alb.z, 1.0f);
+  }
+  return o;
+}
+
+/* Pass-1 entry for the mesh scene: 1 spp in the real-time modes, 64-spp Bartlett-filtered
+ * ground truth otherwise (8 x 8 rather than 16 x 16: each mesh sample costs several BVH rays). */
+ABT_INLINE Pass1Out os_pass1_pixel_mesh(ABT_CONST FrameUniforms* u, int px, int py,
+                                       ABT_RO_GLOBAL v4* nodes, ABT_RO_GLOBAL v4* tri_a, ABT_RO_GLOBAL v4* tri_n) {
+  v3 ro = mk3(u->cam_eye[0], u->cam_eye[1], u->cam_eye[2]);
+  float fx_c = (float)px + 0.5f;
+  float fy_c = (float)py + 0.5f;
+  v3 rd_c = os_camera_ray(u, fx_c, fy_c);
+  if (u->mode != MODE_GT) {
+    return os_eval_mesh_ray(u, ro, rd_c, fx_c, fy_c, u->mode, 0, nodes, tri_a, tri_n);
+  }
+  Pass1Out center = os_eval_mesh_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT, 0, nodes, tri_a, tri_n);
+  if (center.gbuf_n.w < 0.5f) return center;
+  v3 acc = mk3(0.0f, 0.0f, 0.0f);
+  float w_sum = 0.0f;
+  v3 c_nrm = mk3(center.gbuf_n.x, center.gbuf_n.y, center.gbuf_n.z);
+  const int n_side = 8;
+  const float inv_n = 1.0f / 8.0f;
+  for (int sy = 0; sy < n_side; ++sy) {
+    for (int sx = 0; sx < n_side; ++sx) {
+      int sidx = sy * n_side + sx;
+      v2 j = os_sample_2d(px, py, u->frame_idx + 17, sidx);
+      float ox = ((float)sx + j.x) * inv_n * 2.0f - 1.0f;
+      float oy = ((float)sy + j.y) * inv_n * 2.0f - 1.0f;
+      float w = (1.0f - f_abs(ox)) * (1.0f - f_abs(oy));
+      float qx = fx_c + ox * 0.5f;
+      float qy = fy_c + oy * 0.5f;
+      Pass1Out sp = os_eval_mesh_ray(u, ro, os_camera_ray(u, qx, qy), qx, qy, MODE_GT, sidx, nodes, tri_a, tri_n);
+      /* Crease-clipped primary surface, as in the analytic scenes */
+      if (sp.gbuf_n.w < 0.5f || v3_dot(mk3(sp.gbuf_n.x, sp.gbuf_n.y, sp.gbuf_n.z), c_nrm) <= 0.25f) {
+        sp = os_eval_mesh_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT, sidx, nodes, tri_a, tri_n);
+      }
+      acc = v3_add(acc, v3_scale(mk3(sp.irrad.x, sp.irrad.y, sp.irrad.z), w));
+      w_sum += w;
+    }
+  }
+  v3 avg = v3_scale(acc, 1.0f / f_max(w_sum, 1e-6f));
+  center.irrad = mk4(avg.x, avg.y, avg.z, 0.0f);
+  center.albedo = mk4(1.0f, 1.0f, 1.0f, 0.0f);
+  return center;
+}
+
 /* Single ray evaluation helper for Scene D (White Furnace & Thin-Shell Reciprocity Chamber) */
 ABT_INLINE Pass1Out os_eval_scene_d_ray(ABT_CONST FrameUniforms* u, v3 ro, v3 rd,
                                        float px, float py, int mode) {
@@ -1605,11 +2287,13 @@ ABT_INLINE Pass1Out os_pass1_pixel(ABT_CONST FrameUniforms* u, int px, int py) {
     if (u->scene_id == SCENE_A)      center = os_eval_scene_a_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT, 0);
     else if (u->scene_id == SCENE_B) center = os_eval_scene_b_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT);
     else if (u->scene_id == SCENE_C) center = os_eval_scene_c_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT, 0);
+    else if (u->scene_id >= SCENE_E) center = os_eval_show_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT, 0, u->scene_id);
     else                             center = os_eval_scene_d_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT);
 
-    /* Analytical sky / emissive alcove on Scenes A & C need zero MC supersampling */
+    /* Analytical sky / emissive alcove / light panel on Scenes A, C & E need zero MC supersampling */
     if ((u->scene_id == SCENE_A && (center.gbuf_n.w < 0.5f || center.gbuf_n.w == 4.0f)) ||
-        (u->scene_id == SCENE_C && center.gbuf_n.w < 0.5f)) {
+        (u->scene_id == SCENE_C && center.gbuf_n.w < 0.5f) ||
+        (u->scene_id >= SCENE_E && (center.gbuf_n.w < 0.5f || center.gbuf_n.w == 12.0f))) {
       return center;
     }
 
@@ -1641,6 +2325,11 @@ ABT_INLINE Pass1Out os_pass1_pixel(ABT_CONST FrameUniforms* u, int px, int py) {
           if (sp.gbuf_n.w != c_sid || v3_dot(mk3(sp.gbuf_n.x, sp.gbuf_n.y, sp.gbuf_n.z), c_nrm) <= 0.25f) {
             sp = os_eval_scene_a_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT, sidx);
           }
+        } else if (u->scene_id >= SCENE_E) {
+          sp = os_eval_show_ray(u, ro, rd, qx, qy, MODE_GT, sidx, u->scene_id);
+          if (sp.gbuf_n.w != c_sid || v3_dot(mk3(sp.gbuf_n.x, sp.gbuf_n.y, sp.gbuf_n.z), c_nrm) <= 0.25f) {
+            sp = os_eval_show_ray(u, ro, rd_c, fx_c, fy_c, MODE_GT, sidx, u->scene_id);
+          }
         } else {
           sp = os_eval_scene_c_ray(u, ro, rd, qx, qy, MODE_GT, sidx);
           if (sp.gbuf_n.w != c_sid || v3_dot(mk3(sp.gbuf_n.x, sp.gbuf_n.y, sp.gbuf_n.z), c_nrm) <= 0.25f) {
@@ -1660,6 +2349,7 @@ ABT_INLINE Pass1Out os_pass1_pixel(ABT_CONST FrameUniforms* u, int px, int py) {
   if (u->scene_id == SCENE_A)      return os_eval_scene_a_ray(u, ro, rd_c, fx_c, fy_c, u->mode, 0);
   else if (u->scene_id == SCENE_B) return os_eval_scene_b_ray(u, ro, rd_c, fx_c, fy_c, u->mode);
   else if (u->scene_id == SCENE_C) return os_eval_scene_c_ray(u, ro, rd_c, fx_c, fy_c, u->mode, 0);
+  else if (u->scene_id >= SCENE_E) return os_eval_show_ray(u, ro, rd_c, fx_c, fy_c, u->mode, 0, u->scene_id);
   else                             return os_eval_scene_d_ray(u, ro, rd_c, fx_c, fy_c, u->mode);
 }
 

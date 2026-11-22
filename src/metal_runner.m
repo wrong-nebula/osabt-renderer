@@ -6,6 +6,7 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 #include "scene_setup.h"
+#include "mesh_bvh.h"
 
 static NSString* load_combined_shader(void) {
   NSError* err = nil;
@@ -74,6 +75,11 @@ typedef struct {
   id<MTLBuffer> buf_gn_dump;
   id<MTLBuffer> buf_gp_dump;
   id<MTLBuffer> buf_out;
+  /* Mesh scene (Scene H): BVH nodes + triangle arrays, read-only on the GPU */
+  id<MTLBuffer> buf_mesh_nodes;
+  id<MTLBuffer> buf_mesh_tri_a;
+  id<MTLBuffer> buf_mesh_tri_n;
+  int is_mesh;
   MTLSize grid;
   MTLSize tg;
   MTLSize tg_grid16;
@@ -100,7 +106,31 @@ static void zero_private_history(const MetalCtx* m, size_t sz8) {
   [cb waitUntilCompleted];
 }
 
+static void bind_mesh(const MetalCtx* m, id<MTLComputeCommandEncoder> e) {
+  [e setBuffer:m->buf_mesh_nodes offset:0 atIndex:4];
+  [e setBuffer:m->buf_mesh_tri_a offset:0 atIndex:5];
+  [e setBuffer:m->buf_mesh_tri_n offset:0 atIndex:6];
+}
+
+/* Mesh ground truth: rows [y0, y1) of the frame in one encoder */
+static void encode_mesh_gt_band(const MetalCtx* m, const RunConfig* cfg, const FrameUniforms* u,
+                                int y0, int y1, id<MTLComputeCommandEncoder> e1) {
+  int band[4] = { y0, y1, 0, 0 };
+  [e1 setComputePipelineState:m->pso_p1_gt];
+  [e1 setBytes:u length:sizeof(*u) atIndex:0];
+  [e1 setBuffer:m->buf_out     offset:0 atIndex:1];
+  [e1 setBuffer:m->buf_gn_dump offset:0 atIndex:2];
+  [e1 setBuffer:m->buf_gp_dump offset:0 atIndex:3];
+  bind_mesh(m, e1);
+  [e1 setBytes:band length:sizeof(band) atIndex:7];
+  [e1 dispatchThreads:MTLSizeMake((NSUInteger)cfg->width, (NSUInteger)(y1 - y0), 1) threadsPerThreadgroup:m->tg];
+}
+
 static void encode_pass1_enc(const MetalCtx* m, const RunConfig* cfg, const FrameUniforms* u, int cur, id<MTLComputeCommandEncoder> e1) {
+  if (m->is_mesh && cfg->mode == MODE_GT) {
+    encode_mesh_gt_band(m, cfg, u, 0, cfg->height, e1);
+    return;
+  }
   if (is_direct_pass(cfg)) {
     if (cfg->mode == MODE_GT)          [e1 setComputePipelineState:m->pso_p1_gt];
     else if (cfg->scene_id == SCENE_B) [e1 setComputePipelineState:m->pso_p1_b];
@@ -124,6 +154,7 @@ static void encode_pass1_enc(const MetalCtx* m, const RunConfig* cfg, const Fram
       [e1 setBuffer:m->buf_irrad  offset:0 atIndex:1];
       [e1 setBuffer:m->buf_albedo offset:0 atIndex:2];
       [e1 setBuffer:gb_cur        offset:0 atIndex:3];
+      if (m->is_mesh) bind_mesh(m, e1);
     }
   }
   [e1 dispatchThreads:m->grid threadsPerThreadgroup:m->tg];
@@ -237,6 +268,27 @@ static double run_one_frame(const MetalCtx* m, const RunConfig* cfg, int f) {
   int prv = 1 - cur;
   FrameUniforms u;
   os_fill_uniforms(&u, cfg, f);
+  if (m->is_mesh && cfg->mode == MODE_GT) {
+    /* 64-spp BVH ground truth: one command buffer per 16-row band keeps every submission short */
+    double ms_total = 0.0;
+    for (int y0 = 0; y0 < cfg->height; y0 += 16) {
+      int y1 = (y0 + 16 < cfg->height) ? (y0 + 16) : cfg->height;
+      id<MTLCommandBuffer> cbb = [m->queue commandBuffer];
+      id<MTLComputeCommandEncoder> eb = [cbb computeCommandEncoder];
+      encode_mesh_gt_band(m, cfg, &u, y0, y1, eb);
+      [eb endEncoding];
+      [cbb commit];
+      [cbb waitUntilCompleted];
+      if (cbb.status == MTLCommandBufferStatusError) {
+        fprintf(stderr, "GPU error in mesh ground-truth band %d: %s\n", y0,
+                [[cbb.error localizedDescription] UTF8String]);
+        exit(3);
+      }
+      double ms = (cbb.GPUEndTime - cbb.GPUStartTime) * 1000.0;
+      if (ms > 0.0) ms_total += ms;
+    }
+    return ms_total;
+  }
   id<MTLCommandBuffer> cb = [m->queue commandBuffer];
   id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
   encode_pass1_enc(m, cfg, &u, cur, enc);
@@ -276,7 +328,7 @@ int main(int argc, char** argv) {
   @autoreleasepool {
     RunConfig cfg;
     if (os_parse_args(argc, argv, &cfg) != 0) {
-      fprintf(stderr, "Usage: osabt_metal --scene a|b|c|d --mode osabt|ablated|baseline|gt ...\n");
+      fprintf(stderr, "Usage: osabt_metal --scene a|b|c|d|e|f|g|h --mode osabt|ablated|baseline|gt ...\n");
       return 1;
     }
 
@@ -346,13 +398,16 @@ int main(int argc, char** argv) {
     memset(&m, 0, sizeof(m));
     m.queue = [dev newCommandQueue];
     if (is_direct_pass(&cfg)) {
-      if (cfg.mode == MODE_GT)          m.pso_p1_gt = make_pso(dev, lib, @"k_pass1_gt");
+      if (cfg.mode == MODE_GT)          m.pso_p1_gt = make_pso(dev, lib, (cfg.scene_id == SCENE_H) ? @"k_pass1_gt_mesh" : @"k_pass1_gt");
       else if (cfg.scene_id == SCENE_B) m.pso_p1_b  = make_pso(dev, (cfg.mode == MODE_OSABT) ? lib_p2 : lib,
                                                                (cfg.mode == MODE_OSABT) ? @"k_pass1_scene_b_osabt" : @"k_pass1_scene_b");
       else                              m.pso_p1_d  = make_pso(dev, lib, @"k_pass1_scene_d");
     } else {
       if (cfg.scene_id == SCENE_A)      m.pso_p1_a  = make_pso(dev, lib, (cfg.mode == MODE_OSABT) ? @"k_pass1_scene_a_osabt" : @"k_pass1_scene_a");
-      else                              m.pso_p1_c  = make_pso(dev, lib, @"k_pass1_scene_c");
+      else                              m.pso_p1_c  = make_pso(dev, lib, (cfg.scene_id == SCENE_E) ? @"k_pass1_scene_e" :
+                                                                    (cfg.scene_id == SCENE_F) ? @"k_pass1_scene_f" :
+                                                                    (cfg.scene_id == SCENE_G) ? @"k_pass1_scene_g" :
+                                                                    (cfg.scene_id == SCENE_H) ? @"k_pass1_scene_h" : @"k_pass1_scene_c");
       if (cfg.mode == MODE_OSABT) {
         if (cfg.scene_id == SCENE_A || cfg.frames <= 1) {
           m.pso_osabt_sph = make_pso(dev, lib_p2, @"k_pass2_osabt_spatial_h");
@@ -395,6 +450,16 @@ int main(int argc, char** argv) {
     m.buf_gp_dump   = [dev newBufferWithLength:(cfg.dump_gbuf ? sz16 : 64) options:ropt_sh];
     m.buf_out       = [dev newBufferWithLength:sz16    options:ropt_sh];
 
+    if (cfg.scene_id == SCENE_H) {
+      OsMesh mesh;
+      if (os_mesh_load(cfg.mesh_path, &mesh) != 0) return 1;
+      m.is_mesh = 1;
+      m.buf_mesh_nodes = [dev newBufferWithBytes:mesh.nodes length:(size_t)mesh.n_nodes * 8 * sizeof(float) options:ropt_sh];
+      m.buf_mesh_tri_a = [dev newBufferWithBytes:mesh.tri_a length:(size_t)mesh.n_tris * 12 * sizeof(float) options:ropt_sh];
+      m.buf_mesh_tri_n = [dev newBufferWithBytes:mesh.tri_n length:(size_t)mesh.n_tris * 12 * sizeof(float) options:ropt_sh];
+      fprintf(stderr, "mesh: %u triangles, %u BVH nodes, depth %d\n", mesh.n_tris, mesh.n_nodes, mesh.max_depth);
+      os_mesh_free(&mesh);
+    }
     m.grid          = MTLSizeMake((NSUInteger)cfg.width, (NSUInteger)cfg.height, 1);
     m.tg            = MTLSizeMake(16, 16, 1);
     m.tg_grid16     = MTLSizeMake((NSUInteger)TW, (NSUInteger)TH, 1);

@@ -21,6 +21,7 @@ typedef struct {
   char out_dir[512];
   int has_key_frames;
   int key_mask[1024];
+  char mesh_path[512];   /* triangle mesh for the mesh scenes (Scene H) */
 } RunConfig;
 
 static void os_build_cam(v3 eye, v3 target, float fov_deg,
@@ -85,6 +86,38 @@ static void os_scene_camera_at(int scene_id, int frame_idx,
     } else if (frame_idx >= 75) {
       out_lcol[0] = 0.55f; out_lcol[1] = 0.88f; out_lcol[2] = 1.45f; out_lcol[3] = 2.1f;
     }
+  } else if (scene_id == SCENE_E) {
+    /* Gallery showcase: constant-velocity lateral dolly with a slight push-in (parallax and
+       disocclusion around the spheres and pedestal), static lighting. The dolly stops after
+       180 frames so the camera stays inside the room on long runs. */
+    float f = (float)((frame_idx < 180) ? frame_idx : 180);
+    os_build_cam(mk3(-0.80f + 0.0135f * f, 1.60f, 3.30f - 0.0040f * f),
+                 mk3(0.0f, 1.05f, -2.00f), 56.0f,
+                 out_eye, out_fwd, out_rgt, out_up);
+  } else if (scene_id == SCENE_F) {
+    /* Colonnade: slow walk down the right side of the hall, looking across the column row toward
+       the window (strong parallax between columns), warm low-sun light. The walk stops after
+       150 frames, with the first column still fully in frame. */
+    float f = (float)((frame_idx < 150) ? frame_idx : 150);
+    os_build_cam(mk3(0.90f, 1.50f, 3.20f - 0.0150f * f),
+                 mk3(-0.30f, 1.20f, -5.00f), 56.0f,
+                 out_eye, out_fwd, out_rgt, out_up);
+    out_lcol[0] = 1.0f; out_lcol[1] = 0.80f; out_lcol[2] = 0.56f; out_lcol[3] = 1.0f;
+  } else if (scene_id == SCENE_G) {
+    /* Still life: close lateral track around the table, stops after 160 frames */
+    float f = (float)((frame_idx < 160) ? frame_idx : 160);
+    os_build_cam(mk3(-1.00f + 0.0140f * f, 1.60f, 0.60f),
+                 mk3(0.0f, 0.95f, -2.00f), 45.0f,
+                 out_eye, out_fwd, out_rgt, out_up);
+  } else if (scene_id == SCENE_H) {
+    /* Sponza: slow eye-height walk down the atrium, looking slightly up; cool sky light (the warm
+       sun is fixed in the scene). The walk stops after 200 frames, well inside the atrium and
+       short of the planters that otherwise crowd the frame. */
+    float f = (float)((frame_idx < 200) ? frame_idx : 200);
+    float ex = -6.30f + 0.0120f * f;
+    os_build_cam(mk3(ex, 1.70f, 0.0f), mk3(ex + 10.0f, 3.20f, 0.0f), 65.0f,
+                 out_eye, out_fwd, out_rgt, out_up);
+    out_lcol[0] = 0.70f; out_lcol[1] = 0.85f; out_lcol[2] = 1.0f; out_lcol[3] = 1.0f;
   } else {
     os_build_cam(mk3(0.0f, 0.85f, 2.60f), mk3(0.0f, 0.55f, -2.00f), 48.0f,
                  out_eye, out_fwd, out_rgt, out_up);
@@ -115,6 +148,7 @@ static int os_parse_args(int argc, char** argv, RunConfig* cfg) {
   memset(cfg, 0, sizeof(*cfg));
   cfg->width = 1280; cfg->height = 720; cfg->frames = 1; cfg->warmup = 4;
   strcpy(cfg->out_dir, "artifacts/out");
+  strcpy(cfg->mesh_path, "artifacts/sponza/sponza_mesh.bin");
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "--scene") == 0 && i + 1 < argc) {
       const char* s = argv[++i];
@@ -122,6 +156,10 @@ static int os_parse_args(int argc, char** argv, RunConfig* cfg) {
       else if (s[0] == 'b' || s[0] == 'B') cfg->scene_id = SCENE_B;
       else if (s[0] == 'c' || s[0] == 'C') cfg->scene_id = SCENE_C;
       else if (s[0] == 'd' || s[0] == 'D') cfg->scene_id = SCENE_D;
+      else if (s[0] == 'e' || s[0] == 'E') cfg->scene_id = SCENE_E;
+      else if (s[0] == 'f' || s[0] == 'F') cfg->scene_id = SCENE_F;
+      else if (s[0] == 'g' || s[0] == 'G') cfg->scene_id = SCENE_G;
+      else if (s[0] == 'h' || s[0] == 'H') cfg->scene_id = SCENE_H;
       else return -1;
     } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
       const char* m = argv[++i];
@@ -140,6 +178,8 @@ static int os_parse_args(int argc, char** argv, RunConfig* cfg) {
       cfg->warmup = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--out-dir") == 0 && i + 1 < argc) {
       snprintf(cfg->out_dir, sizeof(cfg->out_dir), "%s", argv[++i]);
+    } else if (strcmp(argv[i], "--mesh") == 0 && i + 1 < argc) {
+      snprintf(cfg->mesh_path, sizeof(cfg->mesh_path), "%s", argv[++i]);
     } else if (strcmp(argv[i], "--dump-gbuf") == 0) {
       cfg->dump_gbuf = 1;
     } else if (strcmp(argv[i], "--dump-epipolar") == 0) {
@@ -194,7 +234,7 @@ static void os_write_telemetry(const RunConfig* cfg, double* ms_arr, int n_ms,
   double mn  = (n > 0) ? sorted[0] : 0.0;
   double p10 = (n > 0) ? sorted[(int)((n - 1) * 0.10)] : 0.0;
   double mean = (n > 0) ? (sum / (double)n) : 0.0;
-  const char* sc_names[4] = {"a","b","c","d"};
+  const char* sc_names[8] = {"a","b","c","d","e","f","g","h"};
   const char* m_names[4] = {"osabt","ablated","baseline","gt"};
   char path[600];
   snprintf(path, sizeof(path), "%s/telemetry.json", cfg->out_dir);
