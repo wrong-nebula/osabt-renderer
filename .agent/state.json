@@ -1,0 +1,32 @@
+{
+  "project": "OS-ABT: First-Principles Real-Time Rendering Invention",
+  "current_slice": 2,
+  "slices": {
+    "slice_0_invention_tournament": {
+      "status": "completed",
+      "candidates": ["H1_GCWT", "H2_SCFR", "H3_OS_ABT"],
+      "survivor": "H3_OS_ABT",
+      "artifacts": ["slice0_falsifier.py", "THEORY.md"]
+    },
+    "slice_1_frozen_oracle": {
+      "status": "completed",
+      "artifacts": ["verify_render.py", "oracle_scenes/", "ORACLE.sha256"]
+    },
+    "slice_2_cpu_reference": {
+      "status": "in_progress",
+      "artifacts": ["src/osabt_math.h", "src/cpu_ref.c", "build/osabt_cpu"]
+    },
+    "slice_3_gpu_metal_wgsl": {
+      "status": "pending",
+      "artifacts": ["src/osabt_shaders.metal", "src/metal_runner.m", "build/osabt_metal"]
+    },
+    "slice_4_seeing_space_workbench": {
+      "status": "pending",
+      "artifacts": ["workbench/index.html", "workbench/app.js", "workbench/osabt.wgsl", "workbench/server.py"]
+    },
+    "slice_5_scientific_audit": {
+      "status": "pending",
+      "artifacts": ["artifacts/contact-sheet.png", "artifacts/oracle_report.json", "THEORY.md"]
+    }
+  }
+}

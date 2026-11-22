@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OS-ABT // Seeing Space Optical Workbench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Top Optical Instrumentation Bar -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <div class="brand-title">
+            OS-ABT <span style="color: var(--cyan)">//</span> SEEING SPACE
+            <span class="brand-sub">Orthogonal-Subspace Antiderivative Bilinear Transport</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="status-cluster">
+        <span id="overallBadge" class="overall-badge fail">ORACLE: LOADING</span>
+        <span id="buildMeta" class="build-meta">builds: —</span>
+        <span class="live-pill" title="Auto-polls artifacts/ every 2s for fresh renders and oracle reports">
+          <span id="liveDot" class="live-dot"></span>
+          <span id="liveText">LIVE · 2s</span>
+        </span>
+        <button id="btnAutoPoll" class="btn active" title="Toggle live auto-refresh">AUTO</button>
+        <button id="btnRefresh" class="btn" title="Reload status and images now (R)">REFRESH</button>
+      </div>
+    </header>
+
+    <!-- Live S1-S6 Frozen Oracle Sensor Ribbon -->
+    <section id="sensorRibbon" class="sensor-ribbon" aria-label="Oracle Sensors S1 to S6">
+      <!-- Populated dynamically from /api/status -->
+    </section>
+
+    <!-- Main Asymmetric Split Workspace -->
+    <main class="workspace">
+      <!-- Left/Center: Viewport + Contextual Oscilloscope / Timeline -->
+      <section class="stage-col">
+        <div class="toolbar">
+          <div class="tool-group">
+            <span class="tool-label">Scene</span>
+            <div id="sceneSeg" class="seg">
+              <button data-scene="a" class="active">A · Bleed</button>
+              <button data-scene="b">B · Grazing</button>
+              <button data-scene="c">C · Shock</button>
+              <button data-scene="d">D · Furnace</button>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <span class="tool-label">Layout</span>
+            <div id="layoutSeg" class="seg">
+              <button data-layout="wipe" class="active">Wipe</button>
+              <button data-layout="quad">4-Quad</button>
+              <button data-layout="single">Single</button>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <span class="tool-label">L</span>
+            <select id="selModeL" class="ctrl-select">
+              <option value="osabt" selected>OS-ABT</option>
+              <option value="gt">Ground Truth</option>
+              <option value="baseline">Baseline (TAA+SVGF)</option>
+              <option value="ablated">Ablated</option>
+            </select>
+            <span class="tool-label">R</span>
+            <select id="selModeR" class="ctrl-select">
+              <option value="gt" selected>Ground Truth</option>
+              <option value="osabt">OS-ABT</option>
+              <option value="baseline">Baseline (TAA+SVGF)</option>
+              <option value="ablated">Ablated</option>
+            </select>
+          </div>
+
+          <div class="tool-group">
+            <span class="tool-label">View</span>
+            <select id="selView" class="ctrl-select">
+              <option value="rgb" selected>RGB HDR</option>
+              <option value="err">|Err vs GT|</option>
+              <option value="serr">Signed Err</option>
+              <option value="luma">Log Luma</option>
+              <option value="norm">G-Buf Normals</option>
+              <option value="sid">Surface ID</option>
+              <option value="cos">Grazing cos(θ)</option>
+            </select>
+            <select id="selTonemap" class="ctrl-select" title="Tone Mapping">
+              <option value="aces" selected>ACES</option>
+              <option value="linear">Linear</option>
+            </select>
+          </div>
+
+          <div class="tool-group">
+            <label class="slider-inline" title="Exposure EV">
+              EV <input id="rngExp" type="range" min="-3.5" max="3.5" step="0.25" value="0" />
+              <span id="lblExp">0.0</span>
+            </label>
+            <label class="slider-inline" title="Error Heatmap Gain">
+              Gain <input id="rngAmp" type="range" min="1" max="40" step="1" value="10" />
+              <span id="lblAmp">10×</span>
+            </label>
+            <div id="zoomSeg" class="seg">
+              <button data-zoom="1" class="active">1×</button>
+              <button data-zoom="2">2×</button>
+              <button data-zoom="4">4×</button>
+              <button data-zoom="8">8×</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Optical Viewport Stage -->
+        <div id="viewportWrap" class="viewport-wrap">
+          <div id="viewportInner" class="viewport-inner">
+            <!-- Wipe / Single Mode Layers -->
+            <div id="layerRight" class="viewport-layer">
+              <img id="imgRight" alt="Right comparison render" />
+            </div>
+            <div id="layerLeft" class="viewport-layer">
+              <img id="imgLeft" alt="Left active render" />
+            </div>
+            <div id="wipeDivider" class="wipe-divider" style="left: 50%">
+              <div class="wipe-handle">◄►</div>
+            </div>
+            <div id="badgeLeft" class="vp-badge left">OS-ABT</div>
+            <div id="badgeRight" class="vp-badge right">GT</div>
+
+            <!-- Crosshair Probe -->
+            <div id="crossX" class="crosshair-x" style="top: 50%"></div>
+            <div id="crossY" class="crosshair-y" style="left: 50%"></div>
+            <div id="crossDot" class="crosshair-dot" style="left: 50%; top: 50%"></div>
+
+            <!-- 4-Way Quad Container (toggled in quad layout) -->
+            <div id="quadGrid" class="quad-grid" style="display: none">
+              <div class="quad-cell" data-qmode="gt"><img id="imgQ_gt" alt="GT" /><div class="quad-label">GT (Reference)</div></div>
+              <div class="quad-cell" data-qmode="osabt"><img id="imgQ_osabt" alt="OS-ABT" /><div class="quad-label" style="color: var(--cyan)">OS-ABT</div></div>
+              <div class="quad-cell" data-qmode="baseline"><img id="imgQ_baseline" alt="Baseline" /><div class="quad-label" style="color: var(--amber)">Baseline</div></div>
+              <div class="quad-cell" data-qmode="ablated"><img id="imgQ_ablated" alt="Ablated" /><div class="quad-label" style="color: var(--coral)">Ablated</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Clean 1-line Viewport Status Footer (zero overlap on render pixels) -->
+        <div class="vp-statusbar">
+          <span id="hudCoord">px (640, 360) · zoom 1×</span>
+          <span id="hudScene">Scene A · frame 0</span>
+          <span>P pass · F fail · N note · ←/→ frame · Space play</span>
+        </div>
+
+        <!-- Bottom Contextual Oscilloscope / Temporal Scrubber -->
+        <div class="bottom-strip">
+          <div class="strip-head">
+            <div class="strip-title">
+              <span id="stripLabel">AXIS 1 // 1D SCANLINE OSCILLOSCOPE (y = 360)</span>
+              <div class="legend-row">
+                <span><i class="legend-dot" style="background: var(--white)"></i>GT</span>
+                <span><i class="legend-dot" style="background: var(--cyan)"></i>OS-ABT</span>
+                <span><i class="legend-dot" style="background: var(--amber)"></i>Baseline</span>
+                <span><i class="legend-dot" style="background: var(--coral)"></i>Ablated</span>
+              </div>
+            </div>
+            <div id="frameControls" class="frame-bar">
+              <button id="btnPlay" class="btn" style="display: none">▶ PLAY</button>
+              <div id="kfPills" class="kf-pills"></div>
+              <div id="scopeModeSeg" class="seg">
+                <button data-scope="luma" class="active">Luma</button>
+                <button data-scope="err">|Err|</button>
+              </div>
+            </div>
+          </div>
+          <div id="stripBody" class="strip-body">
+            <div class="scope-box">
+              <canvas id="scanlineCanvas"></canvas>
+            </div>
+            <div id="timelineBox" class="scope-box" style="display: none">
+              <canvas id="timelineCanvas"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Inspector Rail (Bret Victor 3 Axes + Triage) -->
+      <aside class="inspector">
+        <nav class="tabs" role="tablist">
+          <button class="tab-btn active" data-tab="inside">See Inside</button>
+          <button class="tab-btn" data-tab="time">Across Time</button>
+          <button class="tab-btn" data-tab="poss">Possibilities</button>
+          <button class="tab-btn" data-tab="triage">Triage (<span id="notesBadge">0</span>)</button>
+        </nav>
+
+        <!-- TAB 1: SEE INSIDE -->
+        <div id="tab-inside" class="tab-pane active">
+          <div class="card">
+            <div class="card-title">
+              <span>Pixel Probe &amp; 8× Optical Loupe</span>
+              <span id="probeCoordLbl" class="mono" style="color: var(--cyan)">(640, 360)</span>
+            </div>
+            <div class="loupe-row">
+              <canvas id="loupeCanvas" class="loupe-canvas" width="112" height="112"></canvas>
+              <div id="probeQuick" class="kv-grid">
+                <div class="kv-box"><div class="kv-k">OS-ABT |Err|</div><div id="kvOsErr" class="kv-v">—</div></div>
+                <div class="kv-box"><div class="kv-k">Base |Err|</div><div id="kvBsErr" class="kv-v">—</div></div>
+                <div class="kv-box"><div class="kv-k">Surf ID</div><div id="kvSid" class="kv-v">—</div></div>
+                <div class="kv-box"><div class="kv-k">Grazing θ</div><div id="kvAngle" class="kv-v">—</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>Linear HDR Float32 Comparison</span>
+              <span id="probeFrameLbl" class="mono">f=0</span>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr><th>Mode</th><th>Linear RGB</th><th>Luma</th><th>|Err|</th></tr>
+              </thead>
+              <tbody id="probeTableBody">
+                <tr><td colspan="4" style="color: var(--ink-dim)">Click viewport to probe pixel…</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="card" id="stiefelCard">
+            <div class="card-title">
+              <span>Stiefel Null Projector Ψ⊥ (c₀ = 0.20)</span>
+              <span id="normVecLbl" class="mono" style="color: var(--ink-dim)">n = —</span>
+            </div>
+            <div id="stiefelCompass" class="stiefel-compass">
+              <div></div>
+              <div id="scUp" class="stiefel-cell">UP<br/>—</div>
+              <div></div>
+              <div id="scLeft" class="stiefel-cell">LEFT<br/>—</div>
+              <div id="scCenter" class="stiefel-cell center">sid —</div>
+              <div id="scRight" class="stiefel-cell">RIGHT<br/>—</div>
+              <div></div>
+              <div id="scDown" class="stiefel-cell">DOWN<br/>—</div>
+              <div></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>Active Scene Oracle Telemetry</span>
+              <span id="sceneGpuLbl" class="mono" style="color: var(--cyan)">— ms</span>
+            </div>
+            <div id="sceneDetailBox" class="mono" style="font-size: 11px; color: var(--ink-mid)">
+              Loading oracle_report.json…
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: SEE ACROSS TIME -->
+        <div id="tab-time" class="tab-pane">
+          <div class="card">
+            <div class="card-title">
+              <span>Scene C Epipolar x-t Slice (1280 × 120f)</span>
+              <select id="selEpiMode" class="ctrl-select">
+                <option value="osabt" selected>OS-ABT</option>
+                <option value="baseline">Baseline</option>
+                <option value="ablated">Ablated</option>
+              </select>
+            </div>
+            <div id="epipolarBox" class="epipolar-box" title="Click row to jump to nearest Scene C keyframe">
+              <img id="imgEpipolar" alt="Epipolar x-t space-time slice" />
+              <div class="epipolar-marker" style="top: 33.3%; background: var(--coral)" title="f40 Dirac Impulse"></div>
+              <div class="epipolar-marker" style="top: 50%; background: var(--amber)" title="f60 Whip-Pan Start"></div>
+              <div class="epipolar-marker" style="top: 62.5%; background: var(--cyan)" title="f75 Chromatic Step"></div>
+              <div class="epipolar-marker" style="top: 75%; background: var(--amber)" title="f90 Whip-Pan End"></div>
+              <div id="epipolarLine" class="epipolar-line" style="top: 33.3%"></div>
+            </div>
+            <div class="mono" style="font-size: 10px; color: var(--ink-dim); margin-top: 6px; display: flex; justify-content: space-between">
+              <span style="color: var(--coral)">— f40 6.5× Dirac</span>
+              <span style="color: var(--amber)">— f60–90 34° Whip</span>
+              <span style="color: var(--cyan)">— f75 Chromatic</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>Temporal Keyframe RMSE Table</span>
+              <span id="timeSceneLbl" class="mono">Scene C</span>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr><th>Frame</th><th>OS-ABT</th><th>Baseline</th><th>Ablated</th></tr>
+              </thead>
+              <tbody id="timeTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB 3: SEE ACROSS POSSIBILITIES -->
+        <div id="tab-poss" class="tab-pane">
+          <div class="card">
+            <div class="card-title">
+              <span>Lab 1 · Stiefel Ψ⊥ &amp; Geodesic δ_geo</span>
+              <span id="lab1Readout" class="mono" style="color: var(--cyan)">bleed = 0.0000</span>
+            </div>
+            <div class="lab-control">
+              <span>Normal Dead-Zone c₀</span>
+              <span id="lblC0" class="mono">0.20</span>
+              <input id="rngC0" type="range" min="0.00" max="0.50" step="0.02" value="0.20" />
+            </div>
+            <div class="lab-control">
+              <span>Cylinder Curvature (1/R)</span>
+              <span id="lblCurv" class="mono">1.61</span>
+              <input id="rngCurv" type="range" min="0.00" max="3.00" step="0.05" value="1.61" />
+            </div>
+            <div class="seg" id="geoModeSeg" style="width: 100%; justify-content: space-between; margin-bottom: 4px;">
+              <button data-geo="geodesic" class="active">δ_geo Midnormal</button>
+              <button data-geo="maxplane">max(|dx·n|)</button>
+              <button data-geo="gaussian">Gaussian Bilat</button>
+            </div>
+            <canvas id="lab1Canvas" class="lab-canvas" width="360" height="136"></canvas>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>Lab 2 · Crease-Clipped A₂⊥ Grazing Antiderivative</span>
+              <span id="lab2Readout" class="mono" style="color: var(--green)">SNR +29 dB</span>
+            </div>
+            <div class="lab-control">
+              <span>Grazing Angle θ (deg)</span>
+              <span id="lblTheta" class="mono">85.0°</span>
+              <input id="rngTheta" type="range" min="60" max="88.5" step="0.5" value="85.0" />
+            </div>
+            <div class="lab-control">
+              <span>Micro-Groove Freq f</span>
+              <span id="lblFreq" class="mono">3.73</span>
+              <input id="rngFreq" type="range" min="0.5" max="8.0" step="0.1" value="3.73" />
+            </div>
+            <canvas id="lab2Canvas" class="lab-canvas" width="360" height="136"></canvas>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>Lab 3 · Port-Hamiltonian ZDF-TPT &amp; Affine Gauge</span>
+              <span id="lab3Readout" class="mono" style="color: var(--cyan)">ρ = 0.00</span>
+            </div>
+            <div class="lab-control">
+              <span>Dirac Flash Multiplier</span>
+              <span id="lblDirac" class="mono">6.5×</span>
+              <input id="rngDirac" type="range" min="1.5" max="10.0" step="0.5" value="6.5" />
+            </div>
+            <div class="lab-control">
+              <span>Affine Gauge Transport α_g</span>
+              <span id="lblGauge" class="mono">1.00</span>
+              <input id="rngGauge" type="range" min="0.00" max="1.00" step="0.05" value="1.00" />
+            </div>
+            <canvas id="lab3Canvas" class="lab-canvas" width="360" height="136"></canvas>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>WGSL Kernel Mirror (workbench/osabt.wgsl)</span>
+              <span id="wgslStatus" class="mono" style="color: var(--ink-dim)">loading…</span>
+            </div>
+            <pre id="wgslCode" class="wgsl-code"></pre>
+          </div>
+        </div>
+
+        <!-- TAB 4: TRIAGE LOG -->
+        <div id="tab-triage" class="tab-pane">
+          <div class="card">
+            <div class="card-title">
+              <span>Quick Triage Annotation (P / F / N)</span>
+              <a href="/api/notes/export" class="btn" style="text-decoration: none">EXPORT JSONL</a>
+            </div>
+            <input id="noteInput" class="note-input" type="text" placeholder="Optional note attached to current scene/frame/pixel…" />
+            <div class="triage-actions">
+              <button id="btnMarkP" class="btn pass-btn">[P] PASS</button>
+              <button id="btnMarkF" class="btn fail-btn">[F] FAIL</button>
+              <button id="btnMarkN" class="btn note-btn">[N] NOTE</button>
+            </div>
+            <div class="mono" style="font-size: 10px; color: var(--ink-dim)">
+              Appends directly to <code>artifacts/workbench_notes.jsonl</code>
+            </div>
+          </div>
+
+          <div id="notesList"></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

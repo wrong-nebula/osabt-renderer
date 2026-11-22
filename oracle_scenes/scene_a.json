@@ -1,0 +1,37 @@
+{
+  "id": "scene_a",
+  "name": "Orthogonal Junction & Curved SDS Bleed Trap",
+  "description": "High-contrast grazing floor meeting orthogonal curved dark-marble pillar, thin 0.08-unit parapet hiding bright backlit alcove, and recessed colonnade ceiling.",
+  "camera": {
+    "eye": [0.95, 0.42, 1.85],
+    "target": [-0.10, 0.52, -2.80],
+    "up": [0.0, 1.0, 0.0],
+    "fov_deg": 48.0
+  },
+  "geometry": {
+    "floor_y": 0.0,
+    "floor_freq_x": 1.2080078125,
+    "floor_freq_z": 1.4142135623730951,
+    "floor_albedo_hi": [0.95, 0.91, 0.82],
+    "floor_albedo_lo": [0.06, 0.07, 0.09],
+    "pillar_center_xz": [0.0, -2.55],
+    "pillar_radius": 0.62,
+    "pillar_height": 2.40,
+    "pillar_albedo": [0.20, 0.24, 0.30],
+    "parapet_min": [-2.80, 0.0, -4.15],
+    "parapet_max": [2.80, 0.78, -4.07],
+    "parapet_albedo": [0.16, 0.18, 0.22],
+    "alcove_z": -4.48,
+    "alcove_emission": [3.8, 3.0, 1.9],
+    "ceiling_y": 2.40,
+    "beam_min": [-2.80, 2.02, -3.20],
+    "beam_max": [2.80, 2.40, -2.10],
+    "ceiling_albedo": [0.78, 0.75, 0.70]
+  },
+  "lighting": {
+    "sun_dir": [0.48, 0.72, 0.50],
+    "sun_color": [1.65, 1.55, 1.40],
+    "sky_color": [0.30, 0.36, 0.46],
+    "projective_gobo_strength": 0.65
+  }
+}

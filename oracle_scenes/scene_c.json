@@ -1,0 +1,33 @@
+{
+  "id": "scene_c",
+  "name": "Dirac Impulse & Disocclusion Whip-Pan",
+  "description": "120-frame 1-spp stochastic soft-shadow + indirect bounce sweep with Frame-40 Dirac +6x lighting shock, Frames 60-90 whip-pan disocclusion behind foreground pillar, and Frame-75 chromatic step impulse.",
+  "frames": 120,
+  "camera_base": {
+    "eye": [0.15, 0.85, 2.40],
+    "target": [0.0, 0.72, -3.00],
+    "up": [0.0, 1.0, 0.0],
+    "fov_deg": 50.0
+  },
+  "schedule": {
+    "steady_pan_frames": [0, 39],
+    "dirac_impulse_frame": 40,
+    "dirac_intensity_mult": 6.5,
+    "whip_pan_frames": [60, 90],
+    "whip_pan_yaw_deg": 34.0,
+    "step_shock_frame": 75,
+    "step_color_mult": [0.55, 0.88, 1.45],
+    "step_intensity_mult": 2.1,
+    "settle_frames": [91, 119]
+  },
+  "geometry": {
+    "occluder_center_xz": [-0.32, -0.55],
+    "occluder_radius": 0.42,
+    "occluder_height": 2.20,
+    "backdrop_z": -3.60,
+    "floor_y": 0.0,
+    "area_light_pos": [1.80, 2.90, -0.60],
+    "area_light_radius": 0.75
+  },
+  "key_eval_frames": [30, 40, 41, 42, 44, 68, 75, 82, 115]
+}

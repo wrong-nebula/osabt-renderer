@@ -1,0 +1,38 @@
+{
+  "id": "scene_d",
+  "name": "White Furnace & Thin-Shell Reciprocity Chamber",
+  "description": "Uniform unit-radiance (1,1,1) environment enclosing lossless grazing micro-grooved floor, lossless Kulla-Conty rough conductor sphere, curved dielectric sphere, orthogonal lossless wall corner, and two tilted lossless thin glass panels (eta=1.5).",
+  "camera": {
+    "eye": [0.0, 0.85, 2.60],
+    "target": [0.0, 0.55, -2.00],
+    "up": [0.0, 1.0, 0.0],
+    "fov_deg": 48.0
+  },
+  "environment_radiance": [1.0, 1.0, 1.0],
+  "geometry": {
+    "floor_y": 0.0,
+    "floor_albedo": [1.0, 1.0, 1.0],
+    "floor_groove_freq": 1.7083804731470768,
+    "floor_groove_amp": 0.015,
+    "wall_x": -1.75,
+    "wall_albedo": [1.0, 1.0, 1.0],
+    "rough_conductor_center": [-0.68, 0.62, -1.60],
+    "rough_conductor_radius": 0.55,
+    "rough_conductor_alpha": 0.62,
+    "dielectric_sphere_center": [0.72, 0.58, -1.75],
+    "dielectric_sphere_radius": 0.52,
+    "dielectric_ior": 1.50,
+    "glass_panel_1": {
+      "center": [-0.15, 0.75, -0.55],
+      "normal": [0.42261826, 0.0, 0.90630779],
+      "half_extents": [0.65, 0.55],
+      "ior": 1.50
+    },
+    "glass_panel_2": {
+      "center": [0.55, 0.68, -0.35],
+      "normal": [-0.95105652, 0.0, 0.30901699],
+      "half_extents": [0.60, 0.50],
+      "ior": 1.50
+    }
+  }
+}
