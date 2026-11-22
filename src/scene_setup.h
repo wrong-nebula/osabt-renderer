@@ -190,6 +190,9 @@ static void os_write_telemetry(const RunConfig* cfg, double* ms_arr, int n_ms,
   qsort(sorted, (size_t)n, sizeof(double), os_cmp_double);
   double med = (n > 0) ? sorted[n / 2] : 0.0;
   double p95 = (n > 0) ? sorted[(int)((n - 1) * 0.95)] : 0.0;
+  /* Contention-robust floor estimates (other GPU clients only ever ADD time to a frame). */
+  double mn  = (n > 0) ? sorted[0] : 0.0;
+  double p10 = (n > 0) ? sorted[(int)((n - 1) * 0.10)] : 0.0;
   double mean = (n > 0) ? (sum / (double)n) : 0.0;
   const char* sc_names[4] = {"a","b","c","d"};
   const char* m_names[4] = {"osabt","ablated","baseline","gt"};
@@ -207,12 +210,14 @@ static void os_write_telemetry(const RunConfig* cfg, double* ms_arr, int n_ms,
     "  \"gpu_ms_median\": %.6f,\n"
     "  \"gpu_ms_p95\": %.6f,\n"
     "  \"gpu_ms_mean\": %.6f,\n"
+    "  \"gpu_ms_min\": %.6f,\n"
+    "  \"gpu_ms_p10\": %.6f,\n"
     "  \"pass1_ms\": %.6f,\n"
     "  \"pass2_ms\": %.6f\n"
     "}\n",
     sc_names[cfg->scene_id], m_names[cfg->mode],
     cfg->width, cfg->height, cfg->frames,
-    med, p95, mean, pass1_ms, pass2_ms);
+    med, p95, mean, mn, p10, pass1_ms, pass2_ms);
   fclose(fp);
 }
 

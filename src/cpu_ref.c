@@ -34,6 +34,9 @@ int main(int argc, char** argv) {
   h4* st_buf[2]    = { (h4*)calloc(npix, sizeof(h4)), (h4*)calloc(npix, sizeof(h4)) };
   h4* tmp_a        = (h4*)calloc(npix, sizeof(h4));
   h4* tmp_b        = (h4*)calloc(npix, sizeof(h4));
+  /* OS-ABT temporal path (Scene C): history state + reprojected history in their own formats */
+  st4* sto_buf[2]  = { (st4*)calloc(npix, sizeof(st4)), (st4*)calloc(npix, sizeof(st4)) };
+  rp4* tmp_rep     = (rp4*)calloc(npix, sizeof(rp4));
 
   v4* tile_su    = (v4*)calloc(ntile, sizeof(v4));
   v4* tile_ss    = (v4*)calloc(ntile, sizeof(v4));
@@ -106,10 +109,10 @@ int main(int argc, char** argv) {
           for (int py = 0; py < cfg.height; ++py)
             for (int px = 0; px < cfg.width; ++px)
               os_pass2a_osabt_reproj(&u, px, py, cur_irrad, gbuf_buf[cur],
-                                     st_buf[prv], gbuf_buf[prv], tmp_a, tmp_b);
+                                     sto_buf[prv], gbuf_buf[prv], tmp_rep, tmp_b);
           for (int ty = 0; ty < TH; ++ty)
             for (int tx = 0; tx < TW; ++tx)
-              os_pass2g1_tile_reduce(&u, tx, ty, tmp_a, tmp_b, gbuf_buf[cur],
+              os_pass2g1_tile_reduce(&u, tx, ty, tmp_rep, tmp_b, gbuf_buf[cur],
                                      tile_su, tile_ss, tile_ss2, tile_sus);
           for (int ty = 0; ty < TH; ++ty)
             for (int tx = 0; tx < TW; ++tx)
@@ -118,7 +121,7 @@ int main(int argc, char** argv) {
           for (int py = 0; py < cfg.height; ++py)
             for (int px = 0; px < cfg.width; ++px)
               os_pass2b_osabt_zdf(&u, px, py, cur_albedo, gbuf_buf[cur],
-                                  tmp_a, tmp_b, tile_kap, tile_bet, st_buf[cur], out_rgb);
+                                  tmp_rep, tmp_b, tile_kap, tile_bet, sto_buf[cur], out_rgb);
         }
       } else if (cfg.mode == MODE_ABLATED) {
         for (int py = 0; py < cfg.height; ++py)
@@ -177,7 +180,8 @@ int main(int argc, char** argv) {
   free(cur_irrad); free(cur_direct); free(cur_albedo);
   free(gbuf_buf[0]); free(gbuf_buf[1]);
   free(st_buf[0]); free(st_buf[1]);
-  free(tmp_a); free(tmp_b);
+  free(tmp_a); free(tmp_b); free(tmp_rep);
+  free(sto_buf[0]); free(sto_buf[1]);
   free(tile_su); free(tile_ss); free(tile_ss2); free(tile_sus);
   free(tile_kap); free(tile_bet);
   free(gn_dump); free(gp_dump); free(aux_dump);

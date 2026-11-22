@@ -375,9 +375,9 @@ kernel void k_pass2a_osabt_reproj(
     constant FrameUniforms& u  [[buffer(0)]],
     const device h4* cur_irrad [[buffer(1)]],
     const device h4* cur_gbuf  [[buffer(2)]],
-    const device h4* prev_st   [[buffer(3)]],
+    const device st4* prev_st  [[buffer(3)]],
     const device h4* prev_gbuf [[buffer(4)]],
-    device h4* out_reproj      [[buffer(5)]],
+    device rp4* out_reproj     [[buffer(5)]],
     device h4* out_sp1         [[buffer(6)]],
     device v4* tile_su         [[buffer(7)]],
     device v4* tile_ss         [[buffer(8)]],
@@ -419,7 +419,7 @@ kernel void k_pass2a_osabt_reproj(
   int px = bx + lx;
   int py = by + ly;
 
-  h4 h_rep_out = h4(0.0h);
+  v4 v_rep_out = mk4(0.0f, 0.0f, 0.0f, 0.0f);
   h4 h_sp1_out = h4(0.0h);
   int valid_red = 0;
 
@@ -432,9 +432,9 @@ kernel void k_pass2a_osabt_reproj(
     float sid_p = gp.w;
 
     if (ci.w < 0.5f || sid_p < 0.5f) {
-      h4 zero_h = v4_to_h4(mk4(ci.x, ci.y, ci.z, 0.0f));
-      out_reproj[idx] = zero_h;
-      out_sp1[idx]    = zero_h;
+      v4 zero_v = mk4(ci.x, ci.y, ci.z, 0.0f);
+      out_reproj[idx] = rp4_store(zero_v);
+      out_sp1[idx]    = v4_to_h4(zero_v);
     } else {
       v3 np = os_oct_decode(gp.x, gp.y);
       float zp = gp.z;
@@ -490,7 +490,7 @@ kernel void k_pass2a_osabt_reproj(
           }
           float w = bwt * rpsi;
           if (w > 1e-5f) {
-            v4 ps4 = h4_to_v4(prev_st[ridx]);
+            v4 ps4 = st4_load(prev_st[ridx]);
             s_prev = v3_add(s_prev, v3_scale(mk3(ps4.x, ps4.y, ps4.z), w));
             prev_age += ps4.w * w;
             rw_sum += w;
@@ -504,8 +504,9 @@ kernel void k_pass2a_osabt_reproj(
           prev_age = 0.0f;
         }
       }
-      h_rep_out = v4_to_h4(mk4(s_prev.x, s_prev.y, s_prev.z, prev_age));
-      out_reproj[idx] = h_rep_out;
+      rp4 rep_st = rp4_store(mk4(s_prev.x, s_prev.y, s_prev.z, prev_age));
+      out_reproj[idx] = rep_st;
+      v_rep_out = rp4_load(rep_st);  /* tile reduction sees exactly what Pass 2B will load */
 
       /* 2. 3x3 Stride-1 Co-Surface Psi_perp Cell Mean & Exact Kish Cell Variance from SRAM */
       float sx = (2.0f * u.cam_right[3] * u.cam_fwd[3]) / (float)W;
@@ -586,7 +587,7 @@ kernel void k_pass2a_osabt_reproj(
   v4 rep = mk4(0.0f, 0.0f, 0.0f, 0.0f);
   v4 sp  = mk4(0.0f, 0.0f, 0.0f, 0.0f);
   if (valid_red) {
-    rep = h4_to_v4(h_rep_out);
+    rep = v_rep_out;
     if (rep.w >= 0.5f) {
       sp = h4_to_v4(h_sp1_out);
       wa = f_min(1.0f, rep.w * 0.25f);
@@ -660,11 +661,11 @@ kernel void k_pass2b_osabt_zdf(
     constant FrameUniforms& u   [[buffer(0)]],
     const device u16_4* cur_alb [[buffer(1)]],
     const device h4* cur_gbuf   [[buffer(2)]],
-    const device h4* tmp_reproj [[buffer(3)]],
+    const device rp4* tmp_reproj [[buffer(3)]],
     const device h4* tmp_sp1    [[buffer(4)]],
     const device v4* tile_kap   [[buffer(5)]],
     const device v4* tile_bet   [[buffer(6)]],
-    device h4* out_st           [[buffer(7)]],
+    device st4* out_st          [[buffer(7)]],
     device v4* out_rgb          [[buffer(8)]],
     uint2 tgp                   [[threadgroup_position_in_grid]],
     uint2 lid                   [[thread_position_in_threadgroup]],
@@ -723,7 +724,7 @@ kernel void k_pass2b_osabt_zdf(
   v4 sp1_c = h4_to_v4(sh_sp1[cslot]);
   if (ca.w < 0.5f || sid_p < 0.5f) {
     v3 col = mk3(sp1_c.x * ca.x, sp1_c.y * ca.y, sp1_c.z * ca.z);
-    out_st[idx]  = v4_to_h4(mk4(sp1_c.x, sp1_c.y, sp1_c.z, 1.0f));
+    out_st[idx]  = st4_store(mk4(sp1_c.x, sp1_c.y, sp1_c.z, 1.0f));
     out_rgb[idx] = mk4(col.x, col.y, col.z, 1.0f);
     return;
   }
@@ -739,7 +740,7 @@ kernel void k_pass2b_osabt_zdf(
   float p_plane     = rp_dot_np * zp;
 
   v3 alb = mk3(ca.x, ca.y, ca.z);
-  v4 rep_c = h4_to_v4(tmp_reproj[idx]);
+  v4 rep_c = rp4_load(tmp_reproj[idx]);
   v3 s_prev = mk3(rep_c.x, rep_c.y, rep_c.z);
   float prev_age = rep_c.w;
   v3 u_sp1 = mk3(sp1_c.x, sp1_c.y, sp1_c.z);
@@ -854,7 +855,7 @@ kernel void k_pass2b_osabt_zdf(
   }
 
   v3 col = v3_mul(alb, v3_max(mk3(0.0f, 0.0f, 0.0f), y_out));
-  out_st[idx]  = v4_to_h4(mk4(s_new.x, s_new.y, s_new.z, age_new));
+  out_st[idx]  = st4_store(mk4(s_new.x, s_new.y, s_new.z, age_new));
   out_rgb[idx] = mk4(col.x, col.y, col.z, 1.0f);
 }
 

@@ -61,6 +61,8 @@ typedef struct {
   id<MTLBuffer> buf_st1;
   id<MTLBuffer> buf_tmp_a;
   id<MTLBuffer> buf_tmp_b;
+  id<MTLBuffer> buf_reproj;  /* rp4 reprojected history (Scene C OS-ABT temporal path only) */
+  size_t st_bytes;           /* byte length of each history buffer (st4 on the OS-ABT temporal path, else h4) */
   /* GPU-Private L2-resident coarse tile buffers (80x45 x 16B = 57.6 KB each) */
   id<MTLBuffer> buf_tile_su;
   id<MTLBuffer> buf_tile_ss;
@@ -86,10 +88,11 @@ static int is_direct_pass(const RunConfig* cfg) {
 }
 
 static void zero_private_history(const MetalCtx* m, size_t sz8) {
+  size_t st_sz = m->st_bytes;
   id<MTLCommandBuffer> cb = [m->queue commandBuffer];
   id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
-  [bl fillBuffer:m->buf_st0   range:NSMakeRange(0, sz8) value:0];
-  [bl fillBuffer:m->buf_st1   range:NSMakeRange(0, sz8) value:0];
+  [bl fillBuffer:m->buf_st0   range:NSMakeRange(0, st_sz) value:0];
+  [bl fillBuffer:m->buf_st1   range:NSMakeRange(0, st_sz) value:0];
   [bl fillBuffer:m->buf_gbuf0 range:NSMakeRange(0, sz8) value:0];
   [bl fillBuffer:m->buf_gbuf1 range:NSMakeRange(0, sz8) value:0];
   [bl endEncoding];
@@ -160,7 +163,7 @@ static void encode_pass2_enc(const MetalCtx* m, const RunConfig* cfg, FrameUnifo
       [e2 setBuffer:gb_cur          offset:0 atIndex:2];
       [e2 setBuffer:st_prv          offset:0 atIndex:3];
       [e2 setBuffer:gb_prv          offset:0 atIndex:4];
-      [e2 setBuffer:m->buf_tmp_a    offset:0 atIndex:5];
+      [e2 setBuffer:m->buf_reproj   offset:0 atIndex:5];
       [e2 setBuffer:m->buf_tmp_b    offset:0 atIndex:6];
       [e2 setBuffer:m->buf_tile_su  offset:0 atIndex:7];
       [e2 setBuffer:m->buf_tile_ss  offset:0 atIndex:8];
@@ -182,7 +185,7 @@ static void encode_pass2_enc(const MetalCtx* m, const RunConfig* cfg, FrameUnifo
       [e2 setBytes:&u length:sizeof(u) atIndex:0];
       [e2 setBuffer:m->buf_albedo   offset:0 atIndex:1];
       [e2 setBuffer:gb_cur          offset:0 atIndex:2];
-      [e2 setBuffer:m->buf_tmp_a    offset:0 atIndex:3];
+      [e2 setBuffer:m->buf_reproj   offset:0 atIndex:3];
       [e2 setBuffer:m->buf_tmp_b    offset:0 atIndex:4];
       [e2 setBuffer:m->buf_tile_kap offset:0 atIndex:5];
       [e2 setBuffer:m->buf_tile_bet offset:0 atIndex:6];
@@ -282,7 +285,10 @@ int main(int argc, char** argv) {
 
     NSString* src = load_combined_shader();
     if (!src) return 1;
+    /* Keep the runtime-compiled kernels on the same storage formats as this binary. */
+    NSDictionary* fmt_macros = @{ @"OSABT_ST_FMT": @(OSABT_ST_FMT), @"OSABT_REP_FMT": @(OSABT_REP_FMT) };
     MTLCompileOptions* opts = [[MTLCompileOptions alloc] init];
+    opts.preprocessorMacros = fmt_macros;
 #if defined(__MAC_15_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_15_0
     if (@available(macOS 15.0, *)) {
       opts.mathMode = MTLMathModeSafe;
@@ -305,7 +311,8 @@ int main(int argc, char** argv) {
     id<MTLLibrary> lib_p2 = lib;
     if (!is_direct_pass(&cfg) || (cfg.scene_id == SCENE_B && cfg.mode == MODE_OSABT)) {
       MTLCompileOptions* opts2 = [[MTLCompileOptions alloc] init];
-      opts2.preprocessorMacros = @{ @"OSABT_PASS2_RELAXED": @1 };
+      opts2.preprocessorMacros = @{ @"OSABT_PASS2_RELAXED": @1,
+                                    @"OSABT_ST_FMT": @(OSABT_ST_FMT), @"OSABT_REP_FMT": @(OSABT_REP_FMT) };
 #if defined(__MAC_15_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_15_0
       if (@available(macOS 15.0, *)) {
         opts2.mathMode = MTLMathModeRelaxed;
@@ -368,10 +375,14 @@ int main(int argc, char** argv) {
     m.buf_albedo    = [dev newBufferWithLength:sz8     options:ropt_priv];
     m.buf_gbuf0     = [dev newBufferWithLength:sz8     options:ropt_priv];
     m.buf_gbuf1     = [dev newBufferWithLength:sz8     options:ropt_priv];
-    m.buf_st0       = [dev newBufferWithLength:sz8     options:ropt_priv];
-    m.buf_st1       = [dev newBufferWithLength:sz8     options:ropt_priv];
+    int osabt_temporal = (cfg.mode == MODE_OSABT && cfg.scene_id != SCENE_A && cfg.frames > 1 && !is_direct_pass(&cfg)) ? 1 : 0;
+    m.st_bytes      = osabt_temporal ? npix * sizeof(st4) : sz8;
+    m.buf_st0       = [dev newBufferWithLength:m.st_bytes options:ropt_priv];
+    m.buf_st1       = [dev newBufferWithLength:m.st_bytes options:ropt_priv];
     m.buf_tmp_a     = [dev newBufferWithLength:sz8     options:ropt_priv];
     m.buf_tmp_b     = [dev newBufferWithLength:sz8     options:ropt_priv];
+    if (osabt_temporal)
+      m.buf_reproj  = [dev newBufferWithLength:npix * sizeof(rp4) options:ropt_priv];
 
     m.buf_tile_su   = [dev newBufferWithLength:sz_tile options:ropt_priv];
     m.buf_tile_ss   = [dev newBufferWithLength:sz_tile options:ropt_priv];

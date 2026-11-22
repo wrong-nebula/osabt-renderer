@@ -33,6 +33,9 @@
     return ushort4(clamp(v, 0.0f, 1.0f) * 65535.0f + 0.5f);
   }
   ABT_INLINE v4 u16_to_v4(u16_4 u) { return float4(u) * (1.0f / 65535.0f); }
+  ABT_INLINE u32 f_bits(float x) { return as_type<uint>(x); }
+  ABT_INLINE float f_from_bits(u32 b) { return as_type<float>(b); }
+  ABT_INLINE u16_4 mku16(u32 x, u32 y, u32 z, u32 w) { return ushort4(uint4(x, y, z, w)); }
   ABT_INLINE float f_abs(float x) { return fabs(x); }
   ABT_INLINE float f_sqrt(float x) { return sqrt(max(x, 0.0f)); }
   ABT_INLINE float f_floor(float x) { return floor(x); }
@@ -57,6 +60,7 @@
 #else
   #include <math.h>
   #include <stdint.h>
+  #include <string.h>
   #define ABT_INLINE static inline
   #define ABT_CONST const
   #define ABT_GLOBAL
@@ -93,6 +97,12 @@
     const float inv = 1.0f / 65535.0f;
     return mk4((float)u.x * inv, (float)u.y * inv, (float)u.z * inv, (float)u.w * inv);
   }
+  ABT_INLINE u32 f_bits(float x) { u32 b; memcpy(&b, &x, sizeof(b)); return b; }
+  ABT_INLINE float f_from_bits(u32 b) { float x; memcpy(&x, &b, sizeof(x)); return x; }
+  ABT_INLINE u16_4 mku16(u32 x, u32 y, u32 z, u32 w) {
+    u16_4 r = { (uint16_t)x, (uint16_t)y, (uint16_t)z, (uint16_t)w };
+    return r;
+  }
   ABT_INLINE float f_abs(float x) { return fabsf(x); }
   ABT_INLINE float f_sqrt(float x) { return sqrtf(x > 0.0f ? x : 0.0f); }
   ABT_INLINE float f_floor(float x) { return floorf(x); }
@@ -111,6 +121,73 @@
   ABT_INLINE v3 v3_min(v3 a, v3 b) { return mk3(f_min(a.x, b.x), f_min(a.y, b.y), f_min(a.z, b.z)); }
   ABT_INLINE v3 v3_max(v3 a, v3 b) { return mk3(f_max(a.x, b.x), f_max(a.y, b.y), f_max(a.z, b.z)); }
   ABT_INLINE v3 v3_clamp(v3 x, v3 lo, v3 hi) { return v3_min(hi, v3_max(lo, x)); }
+#endif
+
+/* -------------------------------------------------------------------------
+ * E16: shared-exponent HDR history pack, 8 B/px (same footprint as half4).
+ *   x,y,z : 16-bit mantissas of max(rgb,0) sharing ONE binary exponent e, value = m * 2^(e-16)
+ *   w     : [15:5] age in 1/32-frame steps (0 .. 63.97; the transport caps age at 36)
+ *           [4:0]  e + 15, e in [-15, 16]  (same ~65504 ceiling as half-float)
+ * Quantum is 2^(e-16) <= max(rgb) * 2^-15, i.e. 32x finer than half4's 2^-10 relative step.
+ * Why it exists: the affine gauge multiplies history by kappa (~6.5x at a Dirac shock), so each
+ * rounding flip between the CPU reference and the relaxed-math GPU kernels is amplified 6.5x.
+ * A half-float flip (2e-3 at s~3) lands at 1.3e-2, far past the 5e-3 parity tolerance; an E16
+ * flip (6e-5) lands at 4e-4. Full float would also work but doubles the history bandwidth.
+ * Pack/unpack use only exact power-of-two scaling and integer ops: bit-identical CPU <-> Metal.
+ * History is non-negative by construction (convex ZDF-TPT updates of non-negative irradiance).
+ * ------------------------------------------------------------------------- */
+ABT_INLINE u16_4 os_pack_e16(v4 v) {
+  float r = f_max(v.x, 0.0f), g = f_max(v.y, 0.0f), b = f_max(v.z, 0.0f);
+  float m = f_max(r, f_max(g, b));
+  int e = (int)((f_bits(m) >> 23) & 0xffu) - 126;          /* m = f * 2^e, f in [0.5, 1) */
+  e = (e < -15) ? -15 : ((e > 16) ? 16 : e);
+  float scale = f_from_bits((u32)(143 - e) << 23);         /* 2^(16-e), exact */
+  u32 mr = (u32)f_min(r * scale + 0.5f, 65535.0f);
+  u32 mg = (u32)f_min(g * scale + 0.5f, 65535.0f);
+  u32 mb = (u32)f_min(b * scale + 0.5f, 65535.0f);
+  u32 ia = (u32)f_min(f_max(v.w, 0.0f) * 32.0f + 0.5f, 2047.0f);
+  return mku16(mr, mg, mb, (ia << 5) | (u32)(e + 15));
+}
+ABT_INLINE v4 os_unpack_e16(u16_4 p) {
+  u32 w = (u32)p.w;
+  float scale = f_from_bits((96u + (w & 31u)) << 23);      /* 2^(e-16), exact */
+  return mk4((float)p.x * scale, (float)p.y * scale, (float)p.z * scale,
+             (float)(w >> 5) * (1.0f / 32.0f));
+}
+
+/* Storage formats of the OS-ABT temporal path (Scene C): history state `st4` and reprojected
+ * history `rp4`.  2 = E16 shared-exponent pack (default), 1 = full float (16 B/px), 0 = half4. */
+#ifndef OSABT_ST_FMT
+#define OSABT_ST_FMT 2
+#endif
+#ifndef OSABT_REP_FMT
+#define OSABT_REP_FMT 2
+#endif
+#if OSABT_ST_FMT == 2
+  typedef u16_4 st4;
+  ABT_INLINE v4  st4_load(st4 s) { return os_unpack_e16(s); }
+  ABT_INLINE st4 st4_store(v4 v) { return os_pack_e16(v); }
+#elif OSABT_ST_FMT == 1
+  typedef v4 st4;
+  ABT_INLINE v4  st4_load(st4 s) { return s; }
+  ABT_INLINE st4 st4_store(v4 v) { return v; }
+#else
+  typedef h4 st4;
+  ABT_INLINE v4  st4_load(st4 s) { return h4_to_v4(s); }
+  ABT_INLINE st4 st4_store(v4 v) { return v4_to_h4(v); }
+#endif
+#if OSABT_REP_FMT == 2
+  typedef u16_4 rp4;
+  ABT_INLINE v4  rp4_load(rp4 s) { return os_unpack_e16(s); }
+  ABT_INLINE rp4 rp4_store(v4 v) { return os_pack_e16(v); }
+#elif OSABT_REP_FMT == 1
+  typedef v4 rp4;
+  ABT_INLINE v4  rp4_load(rp4 s) { return s; }
+  ABT_INLINE rp4 rp4_store(v4 v) { return v; }
+#else
+  typedef h4 rp4;
+  ABT_INLINE v4  rp4_load(rp4 s) { return h4_to_v4(s); }
+  ABT_INLINE rp4 rp4_store(v4 v) { return v4_to_h4(v); }
 #endif
 
 #define OS_PI   3.14159265358979323846f
@@ -1695,9 +1772,9 @@ ABT_INLINE void os_pass2a_osabt_reproj(
     ABT_CONST FrameUniforms* u, int px, int py,
     ABT_RO_GLOBAL h4* cur_irrad,
     ABT_RO_GLOBAL h4* cur_gbuf,
-    ABT_RO_GLOBAL h4* prev_state,
+    ABT_RO_GLOBAL st4* prev_state,
     ABT_RO_GLOBAL h4* prev_gbuf,
-    ABT_GLOBAL h4* out_reproj,
+    ABT_GLOBAL rp4* out_reproj,
     ABT_GLOBAL h4* out_sp1)
 {
   int W = u->width, H = u->height;
@@ -1706,9 +1783,9 @@ ABT_INLINE void os_pass2a_osabt_reproj(
   v4 gp = h4_to_v4(cur_gbuf[idx]);
   float sid_p = gp.w;
   if (ci.w < 0.5f || sid_p < 0.5f) {
-    h4 zero_h = v4_to_h4(mk4(ci.x, ci.y, ci.z, 0.0f));
-    out_reproj[idx] = zero_h;
-    out_sp1[idx]    = zero_h;
+    v4 zero_v = mk4(ci.x, ci.y, ci.z, 0.0f);
+    out_reproj[idx] = rp4_store(zero_v);
+    out_sp1[idx]    = v4_to_h4(zero_v);
     return;
   }
   v3 np = os_oct_decode(gp.x, gp.y);
@@ -1752,7 +1829,7 @@ ABT_INLINE void os_pass2a_osabt_reproj(
       float rpsi = os_psi_perp_plane(v3_sub(x_prev, xp), np, pn_p, w_n, inv_tol_rep);
       float w = bw[b] * rpsi;
       if (w > 1e-5f) {
-        v4 ps4 = h4_to_v4(prev_state[ridx]);
+        v4 ps4 = st4_load(prev_state[ridx]);
         s_prev = v3_add(s_prev, v3_scale(mk3(ps4.x, ps4.y, ps4.z), w));
         prev_age += ps4.w * w;
         rw_sum += w;
@@ -1766,7 +1843,7 @@ ABT_INLINE void os_pass2a_osabt_reproj(
       prev_age = 0.0f;
     }
   }
-  out_reproj[idx] = v4_to_h4(mk4(s_prev.x, s_prev.y, s_prev.z, prev_age));
+  out_reproj[idx] = rp4_store(mk4(s_prev.x, s_prev.y, s_prev.z, prev_age));
 
   /* 2. 3x3 Stride-1 Co-Surface Psi_perp Cell Mean & Exact Kish Cell Variance */
   float sx = (2.0f * u->cam_right[3] * u->cam_fwd[3]) / (float)W;
@@ -1830,7 +1907,7 @@ ABT_INLINE void os_pass2a_osabt_reproj(
  * ========================================================================= */
 ABT_INLINE void os_pass2g1_tile_reduce(
     ABT_CONST FrameUniforms* u, int tx, int ty,
-    ABT_RO_GLOBAL h4* tmp_reproj,
+    ABT_RO_GLOBAL rp4* tmp_reproj,
     ABT_RO_GLOBAL h4* tmp_sp1,
     ABT_RO_GLOBAL h4* cur_gbuf,
     ABT_GLOBAL v4* tile_su,
@@ -1857,7 +1934,7 @@ ABT_INLINE void os_pass2g1_tile_reduce(
         int idx = py * W + px;
         v4 gp = h4_to_v4(cur_gbuf[idx]);
         if (gp.w < 0.5f) continue;
-        v4 rep = h4_to_v4(tmp_reproj[idx]);
+        v4 rep = rp4_load(tmp_reproj[idx]);
         if (rep.w < 0.5f) continue;
         v4 sp = h4_to_v4(tmp_sp1[idx]);
         float wa = f_min(1.0f, rep.w * 0.25f);
@@ -1968,11 +2045,11 @@ ABT_INLINE void os_pass2b_osabt_zdf(
     ABT_CONST FrameUniforms* u, int px, int py,
     ABT_RO_GLOBAL u16_4* cur_albedo,
     ABT_RO_GLOBAL h4* cur_gbuf,
-    ABT_RO_GLOBAL h4* tmp_reproj,
+    ABT_RO_GLOBAL rp4* tmp_reproj,
     ABT_RO_GLOBAL h4* tmp_sp1,
     ABT_RO_GLOBAL v4* tile_kap,
     ABT_RO_GLOBAL v4* tile_bet,
-    ABT_GLOBAL h4* out_state,
+    ABT_GLOBAL st4* out_state,
     ABT_GLOBAL v4* out_rgb)
 {
   int W = u->width, H = u->height;
@@ -1983,7 +2060,7 @@ ABT_INLINE void os_pass2b_osabt_zdf(
   v4 sp1_c = h4_to_v4(tmp_sp1[idx]);
   if (ca.w < 0.5f || sid_p < 0.5f) {
     v3 col = mk3(sp1_c.x * ca.x, sp1_c.y * ca.y, sp1_c.z * ca.z);
-    out_state[idx] = v4_to_h4(mk4(sp1_c.x, sp1_c.y, sp1_c.z, 1.0f));
+    out_state[idx] = st4_store(mk4(sp1_c.x, sp1_c.y, sp1_c.z, 1.0f));
     out_rgb[idx]   = mk4(col.x, col.y, col.z, 1.0f);
     return;
   }
@@ -1997,7 +2074,7 @@ ABT_INLINE void os_pass2b_osabt_zdf(
   v3 dRy3 = mk3(u->cam_up[0] * (3.0f * sy),    u->cam_up[1] * (3.0f * sy),    u->cam_up[2] * (3.0f * sy));
 
   v3 alb = mk3(ca.x, ca.y, ca.z);
-  v4 rep_c = h4_to_v4(tmp_reproj[idx]);
+  v4 rep_c = rp4_load(tmp_reproj[idx]);
   v3 s_prev = mk3(rep_c.x, rep_c.y, rep_c.z);
   float prev_age = rep_c.w;
   v3 u_sp1 = mk3(sp1_c.x, sp1_c.y, sp1_c.z);
@@ -2118,7 +2195,7 @@ ABT_INLINE void os_pass2b_osabt_zdf(
   }
 
   v3 col = v3_mul(alb, v3_max(mk3(0.0f, 0.0f, 0.0f), y_out));
-  out_state[idx] = v4_to_h4(mk4(s_new.x, s_new.y, s_new.z, age_new));
+  out_state[idx] = st4_store(mk4(s_new.x, s_new.y, s_new.z, age_new));
   out_rgb[idx]   = mk4(col.x, col.y, col.z, 1.0f);
 }
 
